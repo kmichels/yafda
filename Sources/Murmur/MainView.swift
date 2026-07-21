@@ -396,12 +396,9 @@ struct HomePage: View {
                     Spacer()
                     Button("Cancel") { editingEntry = nil }
                     Button("Save & Learn") {
-                        let learnedCount = app.correctHistoryEntry(
+                        let outcome = app.correctHistoryEntry(
                             id: entry.id, newText: editText)
-                        learnFeedback = learnedCount > 0
-                            ? "Learned \(learnedCount) correction" +
-                              "\(learnedCount == 1 ? "" : "s") from your fix."
-                            : "Transcript updated."
+                        learnFeedback = outcome.summary
                         editingEntry = nil
                     }
                     .keyboardShortcut(.defaultAction)
@@ -1555,10 +1552,13 @@ final class TrainingModel: ObservableObject {
                     LearnedStore.addTerm(intended)
                     result = "Recognized correctly! Added “\(intended)” to your " +
                              "vocabulary so it stays reliable."
-                } else {
-                    LearnedStore.add(heard: heardText, intended: intended)
+                } else if LearnedStore.add(heard: heardText, intended: intended) {
                     result = "Learned: “\(heardText)” → “\(intended)”. Murmur will " +
                              "make this correction automatically from now on."
+                } else {
+                    result = "Heard “\(heardText)” for “\(intended)” — too common to " +
+                             "rewrite automatically, so Murmur will just expect " +
+                             "“\(intended)” when listening."
                 }
             } catch {
                 result = "Transcription failed: \(error.localizedDescription)"
