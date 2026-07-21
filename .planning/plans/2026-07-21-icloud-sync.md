@@ -70,12 +70,26 @@ enum SyncMerge {
         if !baseOK { passed = false }
         print("\(baseOK ? "PASS" : "FAIL"): syncBaseURL is local, not in iCloud")
 
-        // An absent file must read as nil, never as empty data.
+        // An absent file must report .missing, never .ready(empty).
         let missing = AppPaths.supportDirectory
             .appendingPathComponent("definitely-not-here.json")
-        let missingOK = AppPaths.readIfDownloaded(missing) == nil
+        var missingOK = false
+        if case .missing = AppPaths.readShared(missing) { missingOK = true }
         if !missingOK { passed = false }
-        print("\(missingOK ? "PASS" : "FAIL"): absent file reads as nil")
+        print("\(missingOK ? "PASS" : "FAIL"): absent file reports .missing")
+
+        // A placeholder must report .notDownloaded, NOT .missing - seeding an
+        // evicted file from local data would destroy the other Mac's changes.
+        let evicted = AppPaths.supportDirectory
+            .appendingPathComponent("evicted-probe.json")
+        let evictedPlaceholder = AppPaths.supportDirectory
+            .appendingPathComponent(".evicted-probe.json.icloud")
+        try? Data("placeholder".utf8).write(to: evictedPlaceholder)
+        var evictedOK = false
+        if case .notDownloaded = AppPaths.readShared(evicted) { evictedOK = true }
+        try? FileManager.default.removeItem(at: evictedPlaceholder)
+        if !evictedOK { passed = false }
+        print("\(evictedOK ? "PASS" : "FAIL"): evicted file reports .notDownloaded")
 
         return passed
     }
@@ -126,25 +140,57 @@ Add to `AppPaths.swift`, inside `enum AppPaths`:
         supportDirectory.appendingPathComponent("sync-base.json")
     }
 
-    /// Reads a file, asking iCloud to materialise it first if it has been
-    /// evicted to a placeholder.
+    /// Whether a shared file can be read right now.
     ///
-    /// - Returns: nil when the file is absent OR not yet downloaded. Callers
-    ///   must never treat nil as "empty store" - merging an evicted file as
-    ///   empty would delete every entry and write that result back to both
-    ///   copies.
-    static func readIfDownloaded(_ url: URL) -> Data? {
+    /// `.notDownloaded` is deliberately distinct from `.missing`. A file iCloud
+    /// has evicted still exists on the other Mac, so seeding it from local data
+    /// would destroy that machine's changes. Only `.missing` is safe to
+    /// overwrite. Collapsing these two into one "nil" is the single most
+    /// destructive mistake available in this design.
+    enum RemoteFile {
+        case ready(Data)
+        case missing
+        case notDownloaded
+    }
+
+    /// Reads a shared file, asking iCloud to materialise it first if it has
+    /// been evicted to a placeholder.
+    static func readShared(_ url: URL) -> RemoteFile {
         let manager = FileManager.default
-        if manager.fileExists(atPath: url.path) {
-            return try? Data(contentsOf: url)
-        }
         // iCloud replaces an evicted file with ".<name>.icloud".
         let placeholder = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).icloud")
         if manager.fileExists(atPath: placeholder.path) {
             try? manager.startDownloadingUbiquitousItem(at: url)
+            return .notDownloaded
         }
-        return nil
+        guard manager.fileExists(atPath: url.path) else { return .missing }
+
+        var coordinationError: NSError?
+        // Default to .notDownloaded so a failed read skips the cycle rather
+        // than looking like an empty remote.
+        var result: RemoteFile = .notDownloaded
+        NSFileCoordinator().coordinate(
+            readingItemAt: url, options: [], error: &coordinationError) { readURL in
+            if let data = try? Data(contentsOf: readURL) {
+                result = .ready(data)
+            }
+        }
+        return result
+    }
+
+    /// Atomically writes a shared file, coordinating with the iCloud daemon so
+    /// the write does not collide with `bird` syncing the same path.
+    @discardableResult
+    static func writeShared(_ data: Data, to url: URL) -> Bool {
+        var coordinationError: NSError?
+        var wrote = false
+        NSFileCoordinator().coordinate(
+            writingItemAt: url, options: .forReplacing,
+            error: &coordinationError) { writeURL in
+            wrote = (try? data.write(to: writeURL, options: .atomic)) != nil
+        }
+        return wrote && coordinationError == nil
     }
 ```
 
@@ -404,6 +450,11 @@ enum SyncedStore {
 
     // MARK: - Base snapshot
 
+    /// - Note: a missing or corrupt base returns an empty snapshot, which makes
+    ///   the next merge a plain union. That errs toward keeping data: it can
+    ///   resurrect entries deleted since the last sync, but it can never delete
+    ///   anything. Resurrection is recoverable with the delete button; deletion
+    ///   is not recoverable at all.
     static func loadBase() -> SyncBase {
         guard let data = try? Data(contentsOf: AppPaths.syncBaseURL),
               let base = try? JSONDecoder().decode(SyncBase.self, from: data)
@@ -437,14 +488,21 @@ enum SyncedStore {
             local.corrections.map { (key(for: $0), $0) },
             uniquingKeysWith: { first, _ in first })
 
-        // An unreadable or not-yet-downloaded remote is NOT an empty remote.
-        // Treating it as empty would delete every entry and write that back.
-        guard let remoteData = AppPaths.readIfDownloaded(remoteURL) else {
-            log.info("learned.json not present remotely; seeding from local")
-            writeLearned(local, to: remoteURL)
+        // The three remote states are NOT interchangeable. Seeding on
+        // .notDownloaded would overwrite a file that exists on the other Mac.
+        let remoteData: Data
+        switch AppPaths.readShared(remoteURL) {
+        case .notDownloaded:
+            log.info("learned.json not downloaded yet; skipping this cycle")
+            return
+        case .missing:
+            log.info("learned.json absent remotely; seeding from local")
+            write(local, to: remoteURL)
             base.corrections = localCorrections
             base.terms = local.terms
             return
+        case .ready(let data):
+            remoteData = data
         }
         guard let remote = try? JSONDecoder().decode(LearnedData.self, from: remoteData)
         else {
@@ -471,17 +529,18 @@ enum SyncedStore {
             """)
 
         LearnedStore.save(merged)
-        writeLearned(merged, to: remoteURL)
+        write(merged, to: remoteURL)
         base.corrections = mergedCorrections
         base.terms = mergedTerms
     }
 
-    private static func writeLearned(_ data: LearnedData, to url: URL) {
-        guard let encoded = try? JSONEncoder().encode(data) else { return }
-        do {
-            try encoded.write(to: url, options: .atomic)
-        } catch {
-            log.error("failed writing \(url.path, privacy: .public): \(error)")
+    /// Encodes and writes through `AppPaths.writeShared`, which coordinates
+    /// with the iCloud daemon. A failed write is logged and the base is still
+    /// advanced only by the caller, so the next launch retries.
+    private static func write<T: Encodable>(_ value: T, to url: URL) {
+        guard let encoded = try? JSONEncoder().encode(value) else { return }
+        if !AppPaths.writeShared(encoded, to: url) {
+            log.error("failed writing \(url.path, privacy: .public)")
         }
     }
 }
@@ -570,10 +629,17 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
     private static func syncDictionary(in remoteDirectory: URL, base: inout SyncBase) {
         let remoteURL = remoteDirectory.appendingPathComponent("dictionary.json")
         let local = TextFormatter.loadDictionary()
-        guard let remoteData = AppPaths.readIfDownloaded(remoteURL) else {
+        let remoteData: Data
+        switch AppPaths.readShared(remoteURL) {
+        case .notDownloaded:
+            log.info("dictionary.json not downloaded yet; skipping this cycle")
+            return
+        case .missing:
             write(local, to: remoteURL)
             base.dictionary = local
             return
+        case .ready(let data):
+            remoteData = data
         }
         guard let remote = try? JSONDecoder()
             .decode([String: String].self, from: remoteData) else {
@@ -595,10 +661,17 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
         let localSnippets = Dictionary(
             SnippetStore.load().map { (key(for: $0), $0) },
             uniquingKeysWith: { first, _ in first })
-        guard let remoteData = AppPaths.readIfDownloaded(remoteURL) else {
+        let remoteData: Data
+        switch AppPaths.readShared(remoteURL) {
+        case .notDownloaded:
+            log.info("snippets.json not downloaded yet; skipping this cycle")
+            return
+        case .missing:
             write(Array(localSnippets.values), to: remoteURL)
             base.snippets = localSnippets
             return
+        case .ready(let data):
+            remoteData = data
         }
         guard let remoteList = try? JSONDecoder()
             .decode([Snippet].self, from: remoteData) else {
@@ -617,15 +690,9 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
         base.snippets = merged
     }
 
-    private static func write<T: Encodable>(_ value: T, to url: URL) {
-        guard let encoded = try? JSONEncoder().encode(value) else { return }
-        do {
-            try encoded.write(to: url, options: .atomic)
-        } catch {
-            log.error("failed writing \(url.path, privacy: .public): \(error)")
-        }
-    }
 ```
+
+`write(_:to:)` already exists from Task 3 — do not redeclare it.
 
 Replace the body of `syncAll` so all three run:
 
@@ -643,7 +710,8 @@ Replace the body of `syncAll` so all three run:
     }
 ```
 
-Fold `writeLearned` into the generic `write(_:to:)` and delete it.
+All three stores now route their remote I/O through `AppPaths.readShared` and
+`AppPaths.writeShared`.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -693,6 +761,8 @@ Move the local store aside so the app looks like a fresh Mac with an existing iC
 ```bash
 cd ~/Library/Application\ Support/Murmur
 mv learned.json learned.json.machine-a
+mv dictionary.json dictionary.json.machine-a
+mv snippets.json snippets.json.machine-a 2>/dev/null || true
 mv sync-base.json sync-base.json.machine-a
 open /Users/konrad/projects/murmur/build/Murmur.app
 sleep 5
@@ -763,6 +833,18 @@ Expected: exactly the four files of PR #1 — no `SyncMerge.swift`, no `SyncedSt
 | Missing base degrades to a union (first-run seeding) | 2 (test), 5 step 3 |
 | `os.Logger` with counts only, no user text | 3, 4 |
 | Stays off the PR branch | 5 step 7 |
+
+**Review findings addressed (Gemini, round 1 — 0 Blocker, 1 High, 3 Medium, 3 Low):**
+
+| Finding | Resolution |
+|---|---|
+| **High: an evicted remote file would be overwritten with local data, destroying the other Mac's changes** | **Adopted — this was the most dangerous defect in the plan.** The original `readIfDownloaded` returned `nil` for both "missing" and "evicted", and the seed path wrote local over the remote. Replaced with a tri-state `RemoteFile { ready, missing, notDownloaded }`; `.notDownloaded` aborts that store's sync, only `.missing` seeds. A failed coordinated read also defaults to `.notDownloaded` rather than looking empty. Covered by a new self-test that plants a `.icloud` placeholder. |
+| Medium: no `NSFileCoordinator`, so reads and writes can collide with the iCloud daemon | Adopted. Both `readShared` and `writeShared` now coordinate, and `writeShared` reports failure so it can be logged. |
+| Medium: Task 5's second-machine simulation moved only `learned.json` | Adopted. It now also moves `dictionary.json` and `snippets.json`, so the simulated machine is genuinely clean. |
+| Medium: `syncAll` runs synchronous iCloud I/O on the main thread at launch, risking a watchdog kill if the daemon hangs | Accepted with rationale, not fixed. Backgrounding it introduces a worse bug: the app would read the stores before the merge lands, and a mid-session swap of `learned.json` under a running `MainView` is a real correctness problem. Three small files behind an existence check is the lesser risk. Revisit if a launch hang is ever observed. |
+| Low: `mergeTerms` truncation drops the oldest local terms first | Accepted. Matches `LearnedStore.appendTerm`, which already caps with `removeFirst`. Deviating would be the surprise. |
+| Low: a corrupt base silently becomes a union, resurrecting deleted entries | Accepted and now documented on `loadBase`. It is the safe direction: resurrection is fixable with the delete button, deletion is not fixable at all. |
+| Low: changing only a snippet trigger's casing may be reverted by the merge | Accepted. Case-insensitive keying is what makes the merge agree with `LearnedStore.merging`; a casing-only edit reverting is a cosmetic loss, not data loss. |
 
 **Known gaps, deliberate:**
 - Sync runs at launch only. A machine left running for days will not see the other's changes until relaunch. Accepted in the spec; a file watcher is the escape hatch.
