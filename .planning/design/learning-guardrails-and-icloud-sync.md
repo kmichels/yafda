@@ -144,24 +144,52 @@ does *not* normalise-equal and stays correctly rejected - without the guard,
 **`SyncedStore`** (new, `Sources/Murmur/SyncedStore.swift`) - merge on load, write both
 copies on save, for the three shared files.
 
-### Data model changes (sync branch only)
+### Merge strategy: three-way, no schema change
 
-`LearnedCorrection` gains `var updatedAt: Date?`. `LearnedData` gains
-`var deleted: [Tombstone]?` where `Tombstone` is `{ key: String, at: Date }`. Both
-optional, so unmodified upstream builds still decode the file.
+**Revised 2026-07-21, replacing the original union-plus-tombstones design.** Two facts
+found while reading the stores killed the original:
 
-Merge algorithm for `LearnedData`:
+- `dictionary.json` is a bare `[String: String]` and `snippets.json` a bare `[Snippet]`
+  array. Neither has anywhere to carry a tombstone list without changing a file format
+  upstream owns - while PR #1 is open, that is exactly the wrong thing to do.
+- Tombstones need a per-entity timestamp to decide whether a deletion is stale, which
+  means touching all three schemas.
 
-1. Key corrections on `(heard.lowercased(), intended)`.
-2. Union both sides; on collision take `max(timesSeen)` and the later `updatedAt`.
-3. Union tombstones.
-4. Drop any correction whose key has a tombstone at or after its `updatedAt`. A missing
-   `updatedAt` (an entry written by an unmodified upstream build) is treated as
-   `Date.distantPast`, so a tombstone always wins over a legacy entry.
-5. Union `terms`, minus tombstoned terms.
+Instead each machine keeps a local snapshot of the state it last synced, and merging is
+a three-way diff of base vs local vs remote. **No on-disk format that upstream owns
+changes at all.**
 
-Without step 4 a union merge silently resurrects deleted rules - the specific failure
-that motivated this design, since the reference store had 23 rules pruned by hand.
+For each store, entities are keyed (see below) and the merge is:
+
+1. `localChanges  = diff(base, local)`  - added, modified, removed
+2. `remoteChanges = diff(base, remote)`
+3. Apply both change sets to `base`.
+4. If both sides changed the same key, prefer local - it is the machine the user is
+   sitting at. Never-concurrent use makes this rare by construction.
+5. Write the merged result to local and remote, then write it as the new base.
+
+Deletion needs no tombstone: a key present in `base` and absent in `local` was deleted
+here, so it is removed from the merge rather than resurrected from the remote. That was
+the failure that motivated the original design, and it is handled structurally.
+
+**A missing base degrades to a plain union**, which is exactly the desired first-run
+behaviour when seeding the second machine.
+
+Keys per store:
+
+| Store | Key | Collision rule |
+|---|---|---|
+| `learned.json` corrections | `heard.lowercased()` | higher `timesSeen` wins |
+| `learned.json` terms | the term, lowercased | union; **no delete UI exists, so removals are never inferred** |
+| `dictionary.json` | the dictionary key | prefer local |
+| `snippets.json` | `trigger.lowercased()` | prefer local |
+
+Keying corrections on `heard` alone matches `LearnedStore.merging(_:heard:intended:)`,
+which already enforces one rule per phrase.
+
+The base snapshot lives at `AppPaths.supportDirectory/sync-base.json` - **local, not in
+iCloud**, because it records what *this machine* last saw. Re-applying a merge after a
+crash between the two writes is idempotent, so a stale base is self-correcting.
 
 ## Data Flow
 
@@ -170,9 +198,11 @@ guards → survivors stored → toast names learned and skipped.
 
 **Apply:** transcript produced → `apply(in:using:)` single pass → text inserted.
 
-**Sync load (launch):** read local; read remote; merge; use merged.
-**Sync save:** merge current into both; write local atomically; write remote atomically.
-**iCloud absent:** local only, no error surfaced.
+**Sync (launch):** read base, local and remote; three-way merge; write the merged result
+to local and remote atomically; write it as the new base.
+**Ordinary saves during a session:** write local only, exactly as today. Sync runs at
+launch, so an in-session save needs no remote round trip.
+**iCloud absent:** local only, no error surfaced, base left untouched.
 
 ## API Design
 
@@ -196,15 +226,27 @@ enum LearnedStore {
                                 checker: WordChecker) -> Bool
 }
 
-struct Tombstone: Codable, Equatable {
-    var key: String
-    var at: Date
+/// One store's worth of keyed entities, as seen at the last successful sync.
+struct SyncBase: Codable, Equatable {
+    var corrections: [String: LearnedCorrection] = [:]
+    var terms: [String] = []
+    var dictionary: [String: String] = [:]
+    var snippets: [String: Snippet] = [:]
+}
+
+enum SyncMerge {
+    /// Three-way merge of one keyed collection. `prefersLocal` breaks a
+    /// both-sides-changed tie; `resolve` merges two versions of one entity.
+    static func merge<Value: Equatable>(
+        base: [String: Value], local: [String: Value], remote: [String: Value],
+        resolve: (Value, Value) -> Value) -> [String: Value]
 }
 
 enum SyncedStore {
-    static func merge(_ local: LearnedData, _ remote: LearnedData) -> LearnedData
-    static func load() -> LearnedData
-    static func save(_ data: LearnedData)
+    /// Merged view of a store, and the base to persist if the caller writes.
+    static func loadLearned() -> LearnedData
+    static func saveLearned(_ data: LearnedData)
+    static func syncAll()
 }
 ```
 
@@ -248,17 +290,25 @@ These numbers are reported in the PR description rather than smoothed over.
 - Given `more`→`RAW` and `RAW`→`more`, "RAW" must survive.
 - No region rewritten twice.
 
-### Merge tests (`SyncedStore`, local branch)
+### Merge tests (`SyncMerge`, local branch)
 
-- Union of disjoint stores keeps both sides.
-- Colliding entry takes the higher `timesSeen`.
-- Tombstoned entry stays deleted after merge.
-- Entry re-learned after its tombstone survives.
-- Round-trip through JSON preserves tombstones.
-- Merge is commutative: `merge(a, b) == merge(b, a)`.
+`SyncMerge.merge` is pure, so all of these run without touching disk:
 
-These need a temporary directory, which is a larger lift than the existing pure-function
-cases. They stay on the local branch and out of the PR.
+- Disjoint additions on both sides keep both.
+- An entry deleted locally (in base, absent in local) stays deleted, and is **not**
+  resurrected from the remote. This is the regression that motivated the design.
+- An entry deleted remotely disappears locally.
+- An entry re-added after deletion survives.
+- Colliding corrections take the higher `timesSeen`.
+- Both sides modified the same key: local wins.
+- **Missing base behaves as a union** - the first-run seeding case.
+- An unchanged store merges to itself.
+
+Only the file-level plumbing (`syncAll`, eviction, corrupt remote) needs a temporary
+directory. That is a smaller surface than the original design required, because no
+tombstone bookkeeping has to be round-tripped through JSON.
+
+All of this stays on the local branch and out of PR #1.
 
 ### Edge cases
 
@@ -276,6 +326,8 @@ cases. They stay on the local branch and out of the PR.
 | Remote evicted (`.icloud` placeholder) | request download, skip this merge cycle - never treat absent as empty |
 | Local JSON corrupt | fall back to remote if readable, else empty store |
 | Atomic write fails | log, keep in-memory state, retry on next save |
+| Base missing or corrupt | treat as empty, which degrades the merge to a union - safe, since a union can only over-retain, never delete |
+| Crash between writing the merge and writing the base | next launch re-merges from the stale base; re-applying the same change set is idempotent |
 
 The "absent is not empty" rule matters most: treating a not-yet-downloaded file as an
 empty store would merge to empty and then write that emptiness back, destroying both
