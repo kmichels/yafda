@@ -57,6 +57,9 @@ import, or sync of any kind.
   input may be rewritten more than once.
 - Explicit teaching via the Voice Training page is unaffected. The user stating a
   mapping outright is not a guess and is not second-guessed.
+- **All four existing `LearnedStore.runSelfTest()` cases must remain green.** They
+  encode the author's definition of a legitimate mapping and are treated as
+  requirements, not as tests we are free to edit.
 - The existing "Learned N corrections" feedback names what was learned and what was
   skipped.
 - No change to the on-disk format. Existing `learned.json` files must load unchanged.
@@ -108,11 +111,21 @@ live checker would pass on one Mac and fail on another.
 **`LearnedStore.isUsefulMapping(heard:intended:)`** gains two guards:
 
 - *Ordinary-speech guard*: reject when every whitespace-separated token in `heard` is an
-  ordinary word. A token is ordinary when, after trimming surrounding punctuation and
+  ordinary word, **unless the mapping is a pure re-segmentation** - that is, unless
+  `heard` and `intended` are equal after lowercasing and removing every non-alphanumeric
+  character. A token is ordinary when, after trimming surrounding punctuation and
   lowercasing, it contains no digits, is at least two characters, and is spelled
   correctly. Lowercasing is essential - spell checkers accept any capitalised token as a
   proper noun, and digit rejection preserves model names like `X2D2`.
 - *Reverse guard*: reject when `intended`→`heard` is already stored.
+
+The re-segmentation exception is not a nicety; without it the guard rejects the
+author's own self-test case `base ten`→`Baseten` (`LearnedStore.swift:227`), which is
+precisely the feature they built this for. Re-segmentation is the signal that separates
+a genuine mishearing from a content edit: the same sounds, split differently
+(`"base ten"` and `"Baseten"` both normalise to `"baseten"`). `He caught`→`Helicon`
+does *not* normalise-equal and stays correctly rejected - without the guard,
+"he caught the ball" would become "Helicon the ball".
 
 **`LearnedStore.apply`** splits in two:
 
@@ -202,11 +215,20 @@ target, no new dependency.
 
 ### Guard tests (`LearnedStore`)
 
-Corpus is 36 real mappings from an actual poisoned store, each with a known verdict,
-run against the fake `WordChecker` for determinism.
+The regression suite has two halves, and the first half gates merge:
 
-Measured against the live `NSSpellChecker` during design: **20 of 23 junk mappings
-rejected, 10 of 13 legitimate mappings retained.**
+**The author's four existing cases are hard invariants.** They define what a legitimate
+mapping means to the person who has to accept the PR: `base ten`→`Baseten`,
+`Soren`→`Søren`, `so ren`→`Søren`, and `Hello world` producing no mappings. All four
+must stay green. Any guard that breaks one is wrong by definition, regardless of how
+well it scores on the corpus below.
+
+**The 36 real mappings** from an actual poisoned store, each with a known verdict, run
+against the fake `WordChecker` for determinism.
+
+Measured against the live `NSSpellChecker` with the re-segmentation exception in place:
+**author's tests 3/3 mapping cases pass, 20 of 23 junk mappings rejected, 10 of 13
+legitimate mappings retained.**
 
 - Known false negatives (junk that survives): `Phocus`→`focus`,
   `Phocus standard`→`focus-stack`, `Lightroom, right`→`Lightroom`. All survive because
