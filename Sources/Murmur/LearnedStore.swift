@@ -246,33 +246,30 @@ enum LearnedStore {
     ///     words into one.
     ///   - checker: injectable so self-tests do not depend on the user's
     ///     spelling dictionary.
-    static func isUsefulMapping(heard: String, intended: String,
-                                existing: [LearnedCorrection] = [],
-                                checker: WordChecker? = nil) -> Bool {
+    private static func isUsefulMapping(heard: String, intended: String,
+                                        existing: [LearnedCorrection] = [],
+                                        checker: WordChecker? = nil) -> Bool {
         let checker = checker ?? wordChecker
         guard isValidMapping(heard: heard, intended: intended) else { return false }
 
         // A correction fires as a global whole-word rewrite. If the misheard
         // side is made entirely of ordinary words, it rewrites speech the user
-        // never meant to change. The exception is a re-segmentation of the same
-        // sounds ("base ten" -> "Baseten"), which is a genuine mishearing.
-        if checker.isOrdinaryPhrase(heard),
-           normalizedForComparison(heard) != normalizedForComparison(intended) {
+        // never meant to change. The exception is a genuine re-segmentation of
+        // the same sounds ("base ten" -> "Baseten"); a same-boundary
+        // punctuation edit ("its" -> "it's") is not, and would rewrite ordinary
+        // speech wherever it occurs.
+        if checker.isOrdinaryPhrase(heard), !isResegmentation(of: heard, to: intended) {
             return false
         }
 
-        // A -> B alongside B -> A rewrites every occurrence of both to one value.
-        if existing.contains(where: {
-            $0.heard.lowercased() == intended.lowercased()
-                && $0.intended.lowercased() == heard.lowercased()
-        }) {
+        if isReverseOfExistingMapping(heard: heard, intended: intended, existing: existing) {
             return false
         }
         return true
     }
 
     /// The structural checks every mapping must pass, guards aside.
-    static func isValidMapping(heard: String, intended: String) -> Bool {
+    private static func isValidMapping(heard: String, intended: String) -> Bool {
         heard.count >= 2 && !intended.isEmpty
             && heard.lowercased() != intended.lowercased()
     }
@@ -282,11 +279,17 @@ enum LearnedStore {
     /// Updating a rule that already exists adds no new exposure - there is
     /// still exactly one rule for that phrase. Refusing the update would trap
     /// anyone whose store was poisoned before these guards existed, leaving the
-    /// Voice Training delete button as their only escape.
-    static func shouldStore(heard: String, intended: String,
-                            existing: [LearnedCorrection],
-                            checker: WordChecker? = nil) -> Bool {
+    /// Voice Training delete button as their only escape. That bypass only
+    /// applies to the ordinary-phrase guard, though: the reverse-mapping check
+    /// runs unconditionally, since letting an update recreate an A -> B / B ->
+    /// A pair would still collapse both terms in `apply`.
+    private static func shouldStore(heard: String, intended: String,
+                                    existing: [LearnedCorrection],
+                                    checker: WordChecker? = nil) -> Bool {
         guard isValidMapping(heard: heard, intended: intended) else { return false }
+        if isReverseOfExistingMapping(heard: heard, intended: intended, existing: existing) {
+            return false
+        }
         if existing.contains(where: { $0.heard.lowercased() == heard.lowercased() }) {
             return true
         }
@@ -294,9 +297,28 @@ enum LearnedStore {
                                existing: existing, checker: checker)
     }
 
+    /// A -> B alongside B -> A rewrites every occurrence of both to one value.
+    private static func isReverseOfExistingMapping(
+        heard: String, intended: String, existing: [LearnedCorrection]) -> Bool {
+        existing.contains(where: {
+            $0.heard.lowercased() == intended.lowercased()
+                && $0.intended.lowercased() == heard.lowercased()
+        })
+    }
+
+    /// A re-segmentation moves word boundaries without changing the sounds
+    /// ("base ten" -> "Baseten"). A same-boundary punctuation edit
+    /// ("its" -> "it's") is not, and would rewrite ordinary speech wherever
+    /// it occurs.
+    private static func isResegmentation(of heard: String, to intended: String) -> Bool {
+        normalizedForComparison(heard) == normalizedForComparison(intended)
+            && heard.split(whereSeparator: { $0.isWhitespace }).count
+                != intended.split(whereSeparator: { $0.isWhitespace }).count
+    }
+
     /// Lowercased with every non-alphanumeric character removed, so that
     /// "base ten" and "Baseten" compare equal.
-    static func normalizedForComparison(_ text: String) -> String {
+    private static func normalizedForComparison(_ text: String) -> String {
         String(String.UnicodeScalarView(
             text.lowercased().unicodeScalars.filter {
                 CharacterSet.alphanumerics.contains($0)
@@ -350,7 +372,7 @@ enum LearnedStore {
 
         // MARK: Mapping guards
         let guardChecker = FixedWordChecker(words: [
-            "have", "work", "he", "caught", "base", "ten", "so", "my", "a", "focus",
+            "have", "work", "he", "caught", "base", "ten", "so", "my", "a", "focus", "its",
         ])
         let existing = [LearnedCorrection(heard: "focus", intended: "Phocus")]
         let guardCases: [(heard: String, intended: String, useful: Bool, why: String)] = [
@@ -362,6 +384,7 @@ enum LearnedStore {
             ("Lightrim", "Lightroom", true, "misheard non-word"),
             ("X2D2", "X2D II", true, "digits are not ordinary speech"),
             ("Phocus", "focus", false, "reverse of an existing mapping"),
+            ("its", "it's", false, "punctuation edit on an ordinary word is not a re-segmentation"),
         ]
         for testCase in guardCases {
             let got = LearnedStore.isUsefulMapping(
@@ -385,6 +408,27 @@ enum LearnedStore {
             let got = LearnedStore.shouldStore(
                 heard: testCase.heard, intended: testCase.intended,
                 existing: poisoned, checker: guardChecker)
+            let ok = got == testCase.store
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): shouldStore(\"\(testCase.heard)\" -> " +
+                  "\"\(testCase.intended)\") = \(got) [\(testCase.why)]")
+        }
+
+        // The existing-rule bypass must not skip the reverse guard: with
+        // alpha -> beta and beta -> gamma already stored, beta -> alpha shares
+        // its `heard` with the second rule (bypass-eligible) but is also the
+        // reverse of the first, which apply() would collapse together.
+        let chained = [
+            LearnedCorrection(heard: "alpha", intended: "beta"),
+            LearnedCorrection(heard: "beta", intended: "gamma"),
+        ]
+        let reverseGuardCases: [(heard: String, intended: String, store: Bool, why: String)] = [
+            ("beta", "alpha", false, "reverse guard survives the existing-rule bypass"),
+        ]
+        for testCase in reverseGuardCases {
+            let got = LearnedStore.shouldStore(
+                heard: testCase.heard, intended: testCase.intended,
+                existing: chained, checker: guardChecker)
             let ok = got == testCase.store
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): shouldStore(\"\(testCase.heard)\" -> " +
