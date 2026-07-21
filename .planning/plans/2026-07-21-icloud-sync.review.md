@@ -1,23 +1,30 @@
-Here is the review of the iCloud Sync implementation plan, categorized by severity. 
+Here is a review of the implementation plan, categorized by severity. 
 
 ### High
-*   **Main-Thread Deadlock at Launch:** Calling `NSFileCoordinator` synchronously on the main thread *before* `NSApplication.shared.run()` is highly risky. If the `bird` (iCloud) daemon is hung, the app will bounce in the dock indefinitely and fail to launch without ever showing a UI. 
-    *   *Mitigation:* Wrap the coordination in a timeout, or move `syncAll()` to run asynchronously immediately after the app finishes launching (even if it means a slight delay in data availability).
-*   **Local Changes Blocked by Evicted Remote:** In `syncLearned`, if `readShared` returns `.notDownloaded`, the function returns early to protect the remote data. However, this means any *local* additions/edits are trapped on the Mac and will not upload to iCloud until the OS decides to finish downloading the remote file. 
-    *   *Mitigation:* This is the safest approach for data integrity, but you should log a specific warning so debugging "why isn't my Mac syncing" is obvious.
+*   **Failed iCloud writes will cause local data deletion on the next sync.** 
+    *   *Issue:* The `write(_:to:)` helper ignores the `Bool` result of `AppPaths.writeShared`. In `syncLearned` (and others), `base.corrections = mergedCorrections` is executed even if the iCloud write fails. 
+    *   *Consequence:* If the iCloud write fails (e.g., out of space, daemon error), `base` advances but the remote file stays stale. On the next launch, the 3-way merge will compare the advanced `base` against the stale `remote`, interpret the missing new items as *remote deletions*, and delete your local data.
+    *   *Fix:* Make `write(_:to:)` return a `Bool`. Only update the `base` properties if the remote write succeeds.
+*   **`isTotalWipe` permanently prevents a user from deleting their last item.**
+    *   *Issue:* If a user intentionally deletes their only snippet or correction, `merged` becomes empty while `base` is not. `isTotalWipe` returns `true`, aborting the sync.
+    *   *Consequence:* The iCloud copy survives, and on the next launch, the deleted item is resurrected. A user can never empty a store.
+    *   *Fix:* To distinguish between a corrupt/missing local file and an intentional wipe, check if the local file actually exists on disk (e.g., `FileManager.default.fileExists`) before assuming corruption, or remove `isTotalWipe` and trust the merge.
 
 ### Medium
-*   **Accidental Local Deletion Wipes iCloud:** If a user accidentally deletes `learned.json` via Finder (or if the file corrupts and loads empty), `base` will still have the old keys. The 3-way merge will interpret this as a legitimate deletion of all rules and will silently wipe the iCloud copy.
-    *   *Mitigation:* Implement a "wipe guard." If the merge calculates that 100% of a non-empty store is being deleted, abort the sync and log an error.
-*   **Unentitled iCloud Path Reliability:** Hardcoding the path to `com~apple~CloudDocs/Murmur` works in practice, but without the `com.apple.developer.icloud-container-identifiers` entitlement, macOS does not guarantee immediate sync priority for this folder. `bird` may occasionally ignore or delay syncing it.
-    *   *Mitigation:* Acceptable given the constraints (no paid signing identity), but document this limitation for users.
-*   **Coordinated Write Temp File Behavior:** `Data.write(to:options: .atomic)` inside an `NSFileCoordinator` block using `.forReplacing` can sometimes confuse the coordinator because `.atomic` writes to a temporary file and renames it, bypassing the exact URL the coordinator locked. 
-    *   *Mitigation:* Drop `.atomic` when writing inside a `.forReplacing` coordination block; the coordinator already handles the safe replacement semantics.
+*   **Thread safety risk with background local saves.**
+    *   *Issue:* `syncAll` runs on a background `DispatchQueue` and calls `LearnedStore.save()`, `SnippetStore.save()`, and writes to `TextFormatter.dictionaryURL`. 
+    *   *Consequence:* If the user triggers dictation or a UI action that reads these files at the exact moment the background thread is writing them, it could result in a torn read or JSON decoding error.
+    *   *Fix:* Ensure the upstream `save()` methods use `Data.write(to:options: .atomic)` to guarantee atomic file replacement, or dispatch the local save calls back to the main thread.
+*   **`AppPaths.readShared` masks read errors as `.notDownloaded`.**
+    *   *Issue:* Inside the `NSFileCoordinator` read block, if `Data(contentsOf: readURL)` throws an error (e.g., permission denied, corrupted file), `result` remains `.notDownloaded`.
+    *   *Consequence:* The sync cycle skips silently. While safe (it prevents overwriting), it masks actual file system errors as iCloud eviction delays.
+    *   *Fix:* Add a `.error` case to `RemoteFile` so `SyncedStore` can log a specific error rather than waiting forever for a file that is already downloaded but unreadable.
 
 ### Low
-*   **Data Duplication in `SyncBase`:** `SyncBase` duplicates the entire state of all three stores on disk. While fine for small JSON files, if the user's personal dictionary grows to tens of thousands of words, this doubles the memory and disk footprint during launch.
-    *   *Mitigation:* Acceptable for now, but keep in mind if performance degrades.
-*   **Upstream Schema Fragility:** `SyncBase` relies on `LearnedCorrection` and `Snippet` conforming to `Codable`. If upstream adds a new non-optional field to these models in the future, `sync-base.json` will fail to decode, falling back to an empty base (union mode). 
-    *   *Mitigation:* Acceptable since it degrades safely to a union, but worth noting for future maintenance.
-*   **Case-Only Edits May Revert:** Because `key(for:)` lowercases the trigger/heard phrase, if a user edits a snippet trigger locally from "sig" to "SIG", the merge logic will see it as the same key. Depending on the resolution order, the casing change might be discarded. 
-    *   *Mitigation:* Acceptable cosmetic loss to maintain strict 1:1 parity with `LearnedStore.merging`.
+*   **Hardcoded CloudDocs path acts as a local black hole if iCloud is logged out.**
+    *   *Issue:* `FileManager.default.fileExists(atPath: cloud.path)` can return `true` even if the user is signed out of iCloud (the directory exists locally but the daemon isn't syncing it).
+    *   *Consequence:* The app will silently write to a local folder thinking it is syncing. 
+    *   *Fix:* Acceptable given the strict constraint of avoiding entitlements/ubiquity containers, but worth documenting for troubleshooting user reports of "sync not working".
+*   **Redundant `write` helper declaration.**
+    *   *Issue:* The plan mentions `write(_:to:) already exists from Task 3 — do not redeclare it`, but it's easy to accidentally duplicate or mis-scope it when splitting tasks. 
+    *   *Fix:* Ensure `write(_:to:)` is a `fileprivate static func` at the bottom of `SyncedStore` so all three sync methods can share it cleanly.

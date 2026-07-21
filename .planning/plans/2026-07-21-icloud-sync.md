@@ -504,7 +504,7 @@ enum SyncedStore {
             return
         case .missing:
             log.info("learned.json absent remotely; seeding from local")
-            write(local, to: remoteURL)
+            guard write(local, to: remoteURL) else { return }
             base.corrections = localCorrections
             base.terms = local.terms
             return
@@ -526,10 +526,12 @@ enum SyncedStore {
         let mergedTerms = SyncMerge.mergeTerms(
             base: base.terms, local: local.terms, remote: remote.terms)
 
-        guard !isTotalWipe(base: base.corrections, merged: mergedCorrections) else {
+        // Refuse a wipe caused by DAMAGE, but allow a real "delete everything".
+        if mergedCorrections.isEmpty, !base.corrections.isEmpty,
+           !localIsIntact(LearnedStore.fileURL, as: LearnedData.self) {
             log.error("""
-                merge would delete every correction; aborting so the iCloud copy \
-                survives. learned.json was probably removed or corrupted locally.
+                learned.json is missing or unreadable and the merge would empty \
+                the store; aborting so the iCloud copy survives.
                 """)
             return
         }
@@ -544,31 +546,41 @@ enum SyncedStore {
             """)
 
         LearnedStore.save(merged)
-        write(merged, to: remoteURL)
+        guard write(merged, to: remoteURL) else {
+            log.error("remote write failed; base left untouched so the next launch retries")
+            return
+        }
         base.corrections = mergedCorrections
         base.terms = mergedTerms
     }
 
-    /// Whether a merge would empty a store that was not empty before.
+    /// Whether a local store file is present and decodes cleanly.
     ///
-    /// `LearnedStore.load()` returns an empty store both when the user really
-    /// deleted everything and when `learned.json` was removed in Finder or
-    /// failed to decode. Those are indistinguishable, and the second is far more
-    /// likely - so refuse to propagate a total wipe rather than mirroring the
-    /// damage onto the other Mac.
-    private static func isTotalWipe<Value>(base: [String: Value],
-                                           merged: [String: Value]) -> Bool {
-        !base.isEmpty && merged.isEmpty
+    /// The stores all return an empty value both when the user really deleted
+    /// everything and when the file was removed in Finder or corrupted. Those
+    /// are indistinguishable from the loaded value alone, so ask the file.
+    /// An intentional "delete everything" leaves a present, well-formed file and
+    /// must still propagate - only damage is refused.
+    private static func localIsIntact<T: Decodable>(_ url: URL, as type: T.Type) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return (try? JSONDecoder().decode(type, from: data)) != nil
     }
 
     /// Encodes and writes through `AppPaths.writeShared`, which coordinates
-    /// with the iCloud daemon. A failed write is logged and the base is still
-    /// advanced only by the caller, so the next launch retries.
-    private static func write<T: Encodable>(_ value: T, to url: URL) {
-        guard let encoded = try? JSONEncoder().encode(value) else { return }
-        if !AppPaths.writeShared(encoded, to: url) {
+    /// with the iCloud daemon.
+    ///
+    /// - Returns: whether the write landed. Callers MUST NOT advance the base
+    ///   snapshot on a false return: a base ahead of the remote makes the next
+    ///   merge read the stale remote as a set of deletions and delete this
+    ///   Mac's data.
+    @discardableResult
+    private static func write<T: Encodable>(_ value: T, to url: URL) -> Bool {
+        guard let encoded = try? JSONEncoder().encode(value) else { return false }
+        guard AppPaths.writeShared(encoded, to: url) else {
             log.error("failed writing \(url.path, privacy: .public)")
+            return false
         }
+        return true
     }
 }
 ```
@@ -674,7 +686,7 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
             log.info("dictionary.json not downloaded yet; skipping this cycle")
             return
         case .missing:
-            write(local, to: remoteURL)
+            guard write(local, to: remoteURL) else { return }
             base.dictionary = local
             return
         case .ready(let data):
@@ -689,13 +701,14 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
             base: base.dictionary, local: local, remote: remote) { localValue, _ in
                 localValue
             }
-        guard !isTotalWipe(base: base.dictionary, merged: merged) else {
-            log.error("merge would empty dictionary.json; aborting to protect iCloud")
+        if merged.isEmpty, !base.dictionary.isEmpty,
+           !localIsIntact(TextFormatter.dictionaryURL, as: [String: String].self) {
+            log.error("dictionary.json is missing or unreadable; aborting to protect iCloud")
             return
         }
         log.info("dictionary.json merged: \(merged.count) entries")
         write(merged, to: TextFormatter.dictionaryURL)
-        write(merged, to: remoteURL)
+        guard write(merged, to: remoteURL) else { return }
         base.dictionary = merged
     }
 
@@ -710,7 +723,7 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
             log.info("snippets.json not downloaded yet; skipping this cycle")
             return
         case .missing:
-            write(Array(localSnippets.values), to: remoteURL)
+            guard write(Array(localSnippets.values), to: remoteURL) else { return }
             base.snippets = localSnippets
             return
         case .ready(let data):
@@ -726,14 +739,15 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
         let merged = SyncMerge.merge(
             base: base.snippets, local: localSnippets,
             remote: remoteSnippets) { localValue, _ in localValue }
-        guard !isTotalWipe(base: base.snippets, merged: merged) else {
-            log.error("merge would empty snippets.json; aborting to protect iCloud")
+        if merged.isEmpty, !base.snippets.isEmpty,
+           !localIsIntact(SnippetStore.fileURL, as: [Snippet].self) {
+            log.error("snippets.json is missing or unreadable; aborting to protect iCloud")
             return
         }
         let ordered = merged.values.sorted { $0.trigger < $1.trigger }
         log.info("snippets.json merged: \(ordered.count) snippets")
         SnippetStore.save(ordered)
-        write(ordered, to: remoteURL)
+        guard write(ordered, to: remoteURL) else { return }
         base.snippets = merged
     }
 
@@ -899,12 +913,22 @@ Expected: exactly the four files of PR #1 — no `SyncMerge.swift`, no `SyncedSt
 |---|---|
 | **High: `NSFileCoordinator` on the main thread before `run()` can hang the launch entirely** | Adopted, reversing my round-1 call. Adding coordination made the hang risk real enough that a Dock-bouncing launch with no UI outweighs the staleness I was protecting against. `syncAll` now runs on a background queue after the delegate is installed. Dictation reads the store fresh per transcript, so merged data lands well before anyone can hold the hotkey; only an immediately-opened dashboard is briefly stale. |
 | High: an evicted remote traps local changes until iCloud materialises the file | Adopted as far as it goes. Correct behaviour — the alternative destroys data — but it now logs a `warning` that names the situation, so "why isn't my Mac syncing" is answerable from the log. |
-| **Medium: a locally deleted or corrupt store looks like an intentional wipe and would empty iCloud too** | Adopted, and this is the finding I am happiest to have. `LearnedStore.load()` returns empty both when the user deleted everything and when the file was removed in Finder or failed to decode. `isTotalWipe` now aborts any merge that would empty a previously non-empty store, for all three stores. |
+| **Medium: a locally deleted or corrupt store looks like an intentional wipe and would empty iCloud too** | Adopted, and this is the finding I am happiest to have. `LearnedStore.load()` returns empty both when the user deleted everything and when the file was removed in Finder or failed to decode. Superseded in round 3 by a `localIsIntact` check that asks the *file* rather than the loaded value, so an intentional "delete everything" still propagates. |
 | Medium: `.atomic` inside a `.forReplacing` coordination block writes to a path the coordinator did not lock | Adopted. `writeShared` drops `.atomic`; the coordinator provides replacement semantics itself. |
 | Medium: an unentitled CloudDocs path gets no guaranteed sync priority from `bird` | Accepted and documented. A ubiquity container needs a paid signing identity, which is the constraint that shaped this whole design. |
 | Low: `SyncBase` duplicates all three stores on disk | Accepted. Single-digit KB today. |
 | Low: an upstream non-optional field added to `LearnedCorrection`/`Snippet` breaks base decoding | Accepted — it degrades to a union, which cannot delete anything. |
 | Low: a casing-only trigger edit may be reverted | Accepted. Case-insensitive keying is what keeps the merge consistent with `LearnedStore.merging`. |
+
+**Review findings addressed (Gemini, round 3 — 0 Blocker, 2 High, 2 Medium, 1 Low):**
+
+| Finding | Resolution |
+|---|---|
+| **High: a failed iCloud write still advanced the base, so the next merge would read the stale remote as deletions and delete local data** | Adopted. `write(_:to:)` now returns `Bool`, and every base assignment — including both seeding paths — is gated on a successful remote write. This was the same shape as the round-1 High: the sync destroying the data it exists to protect. |
+| **High: the wipe guard made it impossible to intentionally delete the last correction or snippet** | Adopted. My guard compared loaded values, which cannot distinguish damage from intent. Replaced with `localIsIntact`, which asks whether the file is present and decodes — a real "delete everything" leaves a well-formed empty file and now propagates, while a missing or corrupt one is refused. |
+| Medium: background `syncAll` writes local stores while the UI may read them | Verified rather than changed: `LearnedStore.save`, `SnippetStore.save` and the dictionary write at `MainView.swift:916` all already use `.write(to:options:.atomic)`, so replacement is atomic and a torn read is not possible. Worst case is reading the pre-merge file. |
+| Medium: `readShared` reports a genuine read error as `.notDownloaded` | Accepted. The safe default is the right one, and the caller already logs a `warning` naming the skipped store, which is enough to diagnose. Adding a logger to `AppPaths` for this alone is not worth the surface. |
+| Low: base duplication, upstream schema drift, casing-only edits | Unchanged from round 2 — all degrade safely. |
 
 **Known gaps, deliberate:**
 - Sync runs at launch only. A machine left running for days will not see the other's changes until relaunch. Accepted in the spec; a file watcher is the escape hatch.
