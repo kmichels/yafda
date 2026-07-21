@@ -38,7 +38,7 @@ struct LearnOutcome: Equatable {
         }
         if !skipped.isEmpty {
             parts.append("Skipped " + Self.list(skipped.map { "“\($0.heard)”" })
-                + " - too common to rewrite safely")
+                + " — too common to rewrite safely")
         }
         guard !parts.isEmpty else { return "Transcript updated." }
         return parts.joined(separator: ". ") + "."
@@ -46,6 +46,7 @@ struct LearnOutcome: Equatable {
 
     /// Joins up to two items, summarising any remainder as a count.
     private static func list(_ items: [String]) -> String {
+        if items.count == 2 { return items.joined(separator: " and ") }
         guard items.count > 2 else { return items.joined(separator: ", ") }
         return items.prefix(2).joined(separator: ", ") + " and \(items.count - 2) more"
     }
@@ -618,10 +619,14 @@ enum LearnedStore {
              "Learned “Lightrim” → “Lightroom”."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work")]),
-             "Skipped “have” - too common to rewrite safely."),
+             "Skipped “have” — too common to rewrite safely."),
             (LearnOutcome(learned: [LearnedPair(heard: "JPIG", intended: "JPEG")],
                           skipped: [LearnedPair(heard: "my", intended: "a")]),
-             "Learned “JPIG” → “JPEG”. Skipped “my” - too common to rewrite safely."),
+             "Learned “JPIG” → “JPEG”. Skipped “my” — too common to rewrite safely."),
+            (LearnOutcome(learned: [],
+                          skipped: [LearnedPair(heard: "have", intended: "work"),
+                                    LearnedPair(heard: "my", intended: "a")]),
+             "Skipped “have” and “my” — too common to rewrite safely."),
             // A heavily rewritten transcript must not produce an unbounded toast.
             (LearnOutcome(learned: [], skipped: [
                 LearnedPair(heard: "my", intended: "a"),
@@ -629,7 +634,7 @@ enum LearnedStore {
                 LearnedPair(heard: "God", intended: "guide"),
                 LearnedPair(heard: "form", intended: "forum"),
              ]),
-             "Skipped “my”, “have” and 2 more - too common to rewrite safely."),
+             "Skipped “my”, “have” and 2 more — too common to rewrite safely."),
         ]
         for testCase in summaryCases {
             let got = testCase.outcome.summary
