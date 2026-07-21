@@ -445,6 +445,12 @@ enum SyncedStore {
         snippet.trigger.lowercased()
     }
 
+    private static func keyed(
+        _ corrections: [LearnedCorrection]) -> [String: LearnedCorrection] {
+        Dictionary(corrections.map { (key(for: $0), $0) },
+                   uniquingKeysWith: { first, _ in first })
+    }
+
     /// The more-confirmed correction wins; ties keep the local one.
     static func resolve(_ local: LearnedCorrection,
                         _ remote: LearnedCorrection) -> LearnedCorrection {
@@ -486,11 +492,12 @@ enum SyncedStore {
 
     private static func syncLearned(in remoteDirectory: URL, base: inout SyncBase) {
         let remoteURL = remoteDirectory.appendingPathComponent("learned.json")
-        let local = LearnedStore.load()
-        let localCorrections = Dictionary(
-            local.corrections.map { (key(for: $0), $0) },
-            uniquingKeysWith: { first, _ in first })
 
+        // Read the REMOTE first. A coordinated read can block on the iCloud
+        // daemon for a long time, and anything the user teaches during that
+        // window must join the merge rather than be overwritten by a snapshot
+        // taken before the wait.
+        //
         // The three remote states are NOT interchangeable. Seeding on
         // .notDownloaded would overwrite a file that exists on the other Mac.
         let remoteData: Data
@@ -503,10 +510,11 @@ enum SyncedStore {
                 """)
             return
         case .missing:
+            let seed = LearnedStore.load()
             log.info("learned.json absent remotely; seeding from local")
-            guard write(local, to: remoteURL) else { return }
-            base.corrections = localCorrections
-            base.terms = local.terms
+            guard write(seed, to: remoteURL) else { return }
+            base.corrections = keyed(seed.corrections)
+            base.terms = seed.terms
             return
         case .ready(let data):
             remoteData = data
@@ -516,9 +524,12 @@ enum SyncedStore {
             log.error("remote learned.json is unreadable; keeping local untouched")
             return
         }
-        let remoteCorrections = Dictionary(
-            remote.corrections.map { (key(for: $0), $0) },
-            uniquingKeysWith: { first, _ in first })
+
+        // Blocking read is behind us: snapshot local now, so a correction the
+        // user taught while we waited is merged instead of destroyed.
+        let local = LearnedStore.load()
+        let localCorrections = keyed(local.corrections)
+        let remoteCorrections = keyed(remote.corrections)
 
         let mergedCorrections = SyncMerge.merge(
             base: base.corrections, local: localCorrections,
@@ -573,6 +584,17 @@ enum SyncedStore {
     ///   snapshot on a false return: a base ahead of the remote makes the next
     ///   merge read the stale remote as a set of deletions and delete this
     ///   Mac's data.
+    /// Writes a LOCAL file the way the rest of the app does - a plain atomic
+    /// write, no coordination. Mixing coordinated and uncoordinated writes on
+    /// the same path can deadlock, and every other writer of these files
+    /// (`LearnedStore.save`, `SnippetStore.save`, `MainView`) is uncoordinated.
+    @discardableResult
+    private static func writeLocal<T: Encodable>(_ value: T, to url: URL) -> Bool {
+        guard let encoded = try? JSONEncoder().encode(value) else { return false }
+        return (try? encoded.write(to: url, options: .atomic)) != nil
+    }
+
+    /// Writes a file inside the iCloud folder, coordinated with the daemon.
     @discardableResult
     private static func write<T: Encodable>(_ value: T, to url: URL) -> Bool {
         guard let encoded = try? JSONEncoder().encode(value) else { return false }
@@ -707,7 +729,7 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
             return
         }
         log.info("dictionary.json merged: \(merged.count) entries")
-        write(merged, to: TextFormatter.dictionaryURL)
+        writeLocal(merged, to: TextFormatter.dictionaryURL)
         guard write(merged, to: remoteURL) else { return }
         base.dictionary = merged
     }
@@ -929,6 +951,17 @@ Expected: exactly the four files of PR #1 — no `SyncMerge.swift`, no `SyncedSt
 | Medium: background `syncAll` writes local stores while the UI may read them | Verified rather than changed: `LearnedStore.save`, `SnippetStore.save` and the dictionary write at `MainView.swift:916` all already use `.write(to:options:.atomic)`, so replacement is atomic and a torn read is not possible. Worst case is reading the pre-merge file. |
 | Medium: `readShared` reports a genuine read error as `.notDownloaded` | Accepted. The safe default is the right one, and the caller already logs a `warning` naming the skipped store, which is enough to diagnose. Adding a logger to `AppPaths` for this alone is not worth the surface. |
 | Low: base duplication, upstream schema drift, casing-only edits | Unchanged from round 2 — all degrade safely. |
+
+**Review findings addressed (Gemini, round 4 — 0 Blocker, 2 High, 2 Medium, 2 Low):**
+
+| Finding | Resolution |
+|---|---|
+| **High: background sync races the UI — a correction taught while the coordinated iCloud read blocks would be overwritten by the pre-read snapshot** | Adopted. This was introduced by round 3's own fix (moving sync off the main thread), which is worth noting: each structural change here has created a new hazard. `syncLearned` now reads the remote first and snapshots local only after the blocking read returns, shrinking the window to the merge-and-write itself. |
+| **High: coordinated writes to a LOCAL file mixed with the app's uncoordinated writes can deadlock** | Adopted. `writeLocal` (plain atomic, matching `LearnedStore.save` and `SnippetStore.save`) now handles `dictionary.json`; `write` is reserved strictly for paths inside the iCloud folder. |
+| Medium: an unsandboxed app touching CloudDocs triggers a TCC prompt, and a denial fails silently forever | Noted for Task 5 verification — the first launch after this ships will prompt, and a denial surfaces as a permanent `.notDownloaded`. The `warning` log names the store, which is the diagnosis path. |
+| Medium: `mergeTerms` truncation favours remote terms over older local ones | Accepted. No timestamp exists to sort by, and the 300 cap plus `removeFirst` matches `LearnedStore.appendTerm`. |
+| Low: the iCloud folder is visible in Finder and renaming it silently starts a fresh sync | Accepted and worth telling the user once. Not hidden with a dot prefix, because a visible folder is also how you notice sync is working. |
+| Low: a 0-byte store file reads as corrupt and halts propagation | Accepted. `localIsIntact` treats it as damage, which is the safe direction. |
 
 **Known gaps, deliberate:**
 - Sync runs at launch only. A machine left running for days will not see the other's changes until relaunch. Accepted in the spec; a file watcher is the escape hatch.
