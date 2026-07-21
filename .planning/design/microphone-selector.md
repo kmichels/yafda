@@ -115,11 +115,28 @@ contracts rather than specific hardware:
 
 _Empty - populated during implementation._
 
-## Open Questions / Deliberate Exclusions
+## Input level meter
 
-- **No input level meter.** It would answer "is this mic actually hearing me", which is
-  the natural next question, but it needs a metering tap and UI animation. Worth a
-  follow-up; deliberately out of this change to keep the PR reviewable.
+**Added 2026-07-21.** Originally excluded to keep an upstream PR small; that constraint
+went away when this became a fork, and "is this microphone actually hearing me" is the
+question a picker alone cannot answer. Choosing the right device from a list is
+guesswork if nothing confirms sound is arriving.
+
+**`MicMonitor`** (new, `Sources/Murmur/MicMonitor.swift`) - a lightweight `AVAudioEngine`
+that taps the selected input and publishes a smoothed level, writing nothing to disk.
+
+- `@Published private(set) var level: Float` - 0...1, suitable for a bar.
+- `func start(deviceUID: String?)` / `func stop()`.
+- Level is RMS over each buffer, converted to dBFS and mapped from -60...0 dB onto 0...1,
+  because linear RMS looks dead for normal speech.
+- Smoothed with an asymmetric filter - fast attack, slow decay - so the bar tracks speech
+  instead of flickering.
+
+Runs only while the microphone settings view is on screen. Two engines must not tap the
+same device at once, so **the monitor stops whenever dictation starts** and does not
+restart until the settings view reappears.
+
+## Open Questions / Deliberate Exclusions
 - **No automatic switching** when a preferred device appears or disappears mid-session.
   Resolution happens per recording, which covers the realistic case without a device
   listener.
