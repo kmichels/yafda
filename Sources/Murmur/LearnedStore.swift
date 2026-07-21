@@ -38,7 +38,8 @@ struct LearnOutcome: Equatable {
         }
         if !skipped.isEmpty {
             parts.append("Skipped " + Self.list(skipped.map { "“\($0.heard)”" })
-                + " — manage rules in Voice Training, not as an automatic rewrite")
+                + " — Murmur won’t rewrite \(skipped.count == 1 ? "that" : "those")"
+                + " automatically")
         }
         guard !parts.isEmpty else { return "Transcript updated." }
         return parts.joined(separator: ". ") + "."
@@ -635,14 +636,14 @@ enum LearnedStore {
              "Learned “Lightrim” → “Lightroom”."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work")]),
-             "Skipped “have” — manage rules in Voice Training, not as an automatic rewrite."),
+             "Skipped “have” — Murmur won’t rewrite that automatically."),
             (LearnOutcome(learned: [LearnedPair(heard: "JPIG", intended: "JPEG")],
                           skipped: [LearnedPair(heard: "my", intended: "a")]),
-             "Learned “JPIG” → “JPEG”. Skipped “my” — manage rules in Voice Training, not as an automatic rewrite."),
+             "Learned “JPIG” → “JPEG”. Skipped “my” — Murmur won’t rewrite that automatically."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work"),
                                     LearnedPair(heard: "my", intended: "a")]),
-             "Skipped “have” and “my” — manage rules in Voice Training, not as an automatic rewrite."),
+             "Skipped “have” and “my” — Murmur won’t rewrite those automatically."),
             // A heavily rewritten transcript must not produce an unbounded toast.
             (LearnOutcome(learned: [], skipped: [
                 LearnedPair(heard: "my", intended: "a"),
@@ -650,7 +651,7 @@ enum LearnedStore {
                 LearnedPair(heard: "God", intended: "guide"),
                 LearnedPair(heard: "form", intended: "forum"),
              ]),
-             "Skipped “my”, “have” and 2 more — manage rules in Voice Training, not as an automatic rewrite."),
+             "Skipped “my”, “have” and 2 more — Murmur won’t rewrite those automatically."),
         ]
         for testCase in summaryCases {
             let got = testCase.outcome.summary
