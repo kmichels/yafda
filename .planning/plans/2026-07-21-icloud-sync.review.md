@@ -1,20 +1,23 @@
-Here is the review of your iCloud Sync implementation plan, categorized by severity. 
+Here is the review of the iCloud Sync implementation plan, categorized by severity. 
 
 ### High
-*   **Data Loss on Evicted Files (Logic Flaw):** The plan explicitly states, *"Never treat a not-yet-downloaded file as empty."* However, `AppPaths.readIfDownloaded` returns `nil` for both "file truly missing" and "file is a placeholder/downloading". In Task 3/4, if `readIfDownloaded` returns `nil`, the code assumes the remote is empty and executes `write(local, to: remoteURL)`. **This will overwrite an evicted remote file with local data**, permanently destroying remote changes.
-    *   *Fix:* Change `readIfDownloaded` to return an enum (e.g., `.ready(Data)`, `.missing`, `.downloading`). If `.downloading`, *abort* the sync for that store rather than seeding it from local.
+*   **Main-Thread Deadlock at Launch:** Calling `NSFileCoordinator` synchronously on the main thread *before* `NSApplication.shared.run()` is highly risky. If the `bird` (iCloud) daemon is hung, the app will bounce in the dock indefinitely and fail to launch without ever showing a UI. 
+    *   *Mitigation:* Wrap the coordination in a timeout, or move `syncAll()` to run asynchronously immediately after the app finishes launching (even if it means a slight delay in data availability).
+*   **Local Changes Blocked by Evicted Remote:** In `syncLearned`, if `readShared` returns `.notDownloaded`, the function returns early to protect the remote data. However, this means any *local* additions/edits are trapped on the Mac and will not upload to iCloud until the OS decides to finish downloading the remote file. 
+    *   *Mitigation:* This is the safest approach for data integrity, but you should log a specific warning so debugging "why isn't my Mac syncing" is obvious.
 
 ### Medium
-*   **Missing `NSFileCoordinator`:** You are reading/writing directly to the `com~apple~CloudDocs` directory using `FileManager` and `.atomic` writes. Without `NSFileCoordinator`, your reads/writes can collide with the iCloud daemon (`bird`), leading to locked file errors or silent sync failures.
-    *   *Fix:* While adding `NSFileCoordinator` might violate your "keep it simple" constraint, you must at least handle/log `NSFileReadDeadlock` or locking errors gracefully so the app doesn't crash if iCloud is busy.
-*   **Incomplete "Second Machine" Simulation (Task 5):** In Task 5, Step 3, you move `learned.json` and `sync-base.json` to simulate a fresh Mac, but you forget to move `dictionary.json` and `snippets.json`. 
-    *   *Fix:* Add `mv dictionary.json dictionary.json.machine-a` and `mv snippets.json snippets.json.machine-a` to Step 3 to ensure a truly clean state for all stores.
-*   **Main Thread iCloud I/O:** `syncAll()` runs synchronously on the main thread at launch. Even though the files are small, iCloud Drive directory access can occasionally hang (e.g., if the iCloud daemon is unresponsive). This risks triggering a macOS watchdog termination at launch.
-    *   *Fix:* Acknowledge the risk of launch hangs, or dispatch the sync to a background queue and update the in-memory stores once complete.
+*   **Accidental Local Deletion Wipes iCloud:** If a user accidentally deletes `learned.json` via Finder (or if the file corrupts and loads empty), `base` will still have the old keys. The 3-way merge will interpret this as a legitimate deletion of all rules and will silently wipe the iCloud copy.
+    *   *Mitigation:* Implement a "wipe guard." If the merge calculates that 100% of a non-empty store is being deleted, abort the sync and log an error.
+*   **Unentitled iCloud Path Reliability:** Hardcoding the path to `com~apple~CloudDocs/Murmur` works in practice, but without the `com.apple.developer.icloud-container-identifiers` entitlement, macOS does not guarantee immediate sync priority for this folder. `bird` may occasionally ignore or delay syncing it.
+    *   *Mitigation:* Acceptable given the constraints (no paid signing identity), but document this limitation for users.
+*   **Coordinated Write Temp File Behavior:** `Data.write(to:options: .atomic)` inside an `NSFileCoordinator` block using `.forReplacing` can sometimes confuse the coordinator because `.atomic` writes to a temporary file and renames it, bypassing the exact URL the coordinator locked. 
+    *   *Mitigation:* Drop `.atomic` when writing inside a `.forReplacing` coordination block; the coordinator already handles the safe replacement semantics.
 
 ### Low
-*   **Arbitrary Term Truncation:** In `mergeTerms` (Task 2), if the combined terms exceed 300, you use `result.removeFirst(...)`. Because `result` is built by appending `local` then `remote`, this silently deletes the oldest local terms first. 
-    *   *Fix:* Ensure this aligns with upstream's intended behavior. If terms are sorted by recency elsewhere, you may be dropping the wrong end of the array.
-*   **Corrupted `sync-base.json` Fallback:** If `loadBase()` fails to decode a corrupted base file, it returns an empty `SyncBase()`. The next sync will treat all existing local and remote items as brand-new additions. 
-    *   *Risk:* This safely prevents data loss, but it *will* resurrect previously deleted items. This is the correct fallback behavior, but should be documented in the code.
-*   **Case-Insensitive Keying Edge Case:** `SyncedStore.key(for:)` lowercases triggers/phrases. If a user modifies a snippet's trigger *only* by changing its casing (e.g., "sig" -> "Sig"), the merge will treat them as the same key, and `resolve` will arbitrarily pick one, potentially reverting the casing change.
+*   **Data Duplication in `SyncBase`:** `SyncBase` duplicates the entire state of all three stores on disk. While fine for small JSON files, if the user's personal dictionary grows to tens of thousands of words, this doubles the memory and disk footprint during launch.
+    *   *Mitigation:* Acceptable for now, but keep in mind if performance degrades.
+*   **Upstream Schema Fragility:** `SyncBase` relies on `LearnedCorrection` and `Snippet` conforming to `Codable`. If upstream adds a new non-optional field to these models in the future, `sync-base.json` will fail to decode, falling back to an empty base (union mode). 
+    *   *Mitigation:* Acceptable since it degrades safely to a union, but worth noting for future maintenance.
+*   **Case-Only Edits May Revert:** Because `key(for:)` lowercases the trigger/heard phrase, if a user edits a snippet trigger locally from "sig" to "SIG", the merge logic will see it as the same key. Depending on the resolution order, the casing change might be discarded. 
+    *   *Mitigation:* Acceptable cosmetic loss to maintain strict 1:1 parity with `LearnedStore.merging`.
