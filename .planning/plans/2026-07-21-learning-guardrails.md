@@ -124,7 +124,14 @@ struct SystemWordChecker: WordChecker {
 
     init(localeIdentifier: String = Settings.localeIdentifier) {
         // NSSpellChecker expects "en_US"; Settings stores BCP-47 "en-US".
-        language = localeIdentifier.replacingOccurrences(of: "-", with: "_")
+        // Script-bearing tags ("zh-Hans-CN") do not name an installed
+        // dictionary, so fall back to the checker's own language rather than
+        // passing a name it will not recognise.
+        let candidate = localeIdentifier.replacingOccurrences(of: "-", with: "_")
+        let checker = NSSpellChecker.shared
+        language = checker.availableLanguages.contains(candidate)
+            ? candidate
+            : checker.language()
     }
 
     /// - Important: `token` must already be lowercased by `isOrdinaryWord`.
@@ -170,7 +177,7 @@ git commit -m "Add WordChecker to detect ordinary-speech phrases"
 
 **Interfaces:**
 - Consumes: `WordChecker`, `FixedWordChecker` from Task 1
-- Produces: `LearnedStore.wordChecker: WordChecker` (settable); `LearnedStore.isUsefulMapping(heard:intended:existing:checker:) -> Bool`; `LearnedStore.normalizedForComparison(_:) -> String`; `LearnedStore.add(heard:intended:) -> Bool` (was `Void`)
+- Produces: `LearnedStore.wordChecker: WordChecker` (settable); `LearnedStore.isValidMapping(heard:intended:) -> Bool`; `LearnedStore.isUsefulMapping(heard:intended:existing:checker:) -> Bool`; `LearnedStore.shouldStore(heard:intended:existing:checker:) -> Bool`; `LearnedStore.normalizedForComparison(_:) -> String`; `LearnedStore.add(heard:intended:) -> Bool` (was `Void`)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -199,6 +206,24 @@ Add to `LearnedStore.runSelfTest()` before `return passed`:
             let ok = got == testCase.useful
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): useful(\"\(testCase.heard)\" -> " +
+                  "\"\(testCase.intended)\") = \(got) [\(testCase.why)]")
+        }
+
+        // A store poisoned before these guards existed must stay repairable:
+        // re-correcting an existing rule is an update, not a new rule.
+        let poisoned = [LearnedCorrection(heard: "have", intended: "work")]
+        let storeCases: [(heard: String, intended: String, store: Bool, why: String)] = [
+            ("have", "halve", true, "updates an existing rule, even an ordinary word"),
+            ("my", "a", false, "new rule on an ordinary word"),
+            ("have", "have", false, "no-op mapping is never valid"),
+        ]
+        for testCase in storeCases {
+            let got = LearnedStore.shouldStore(
+                heard: testCase.heard, intended: testCase.intended,
+                existing: poisoned, checker: guardChecker)
+            let ok = got == testCase.store
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): shouldStore(\"\(testCase.heard)\" -> " +
                   "\"\(testCase.intended)\") = \(got) [\(testCase.why)]")
         }
 ```
@@ -233,9 +258,7 @@ Replace `isUsefulMapping` (currently `LearnedStore.swift:214-219`) with:
                                 existing: [LearnedCorrection] = [],
                                 checker: WordChecker? = nil) -> Bool {
         let checker = checker ?? wordChecker
-        guard heard.count >= 2, !intended.isEmpty,
-              heard.lowercased() != intended.lowercased()
-        else { return false }
+        guard isValidMapping(heard: heard, intended: intended) else { return false }
 
         // A correction fires as a global whole-word rewrite. If the misheard
         // side is made entirely of ordinary words, it rewrites speech the user
@@ -254,6 +277,29 @@ Replace `isUsefulMapping` (currently `LearnedStore.swift:214-219`) with:
             return false
         }
         return true
+    }
+
+    /// The structural checks every mapping must pass, guards aside.
+    static func isValidMapping(heard: String, intended: String) -> Bool {
+        heard.count >= 2 && !intended.isEmpty
+            && heard.lowercased() != intended.lowercased()
+    }
+
+    /// Whether `add` should store this mapping given what is already stored.
+    ///
+    /// Updating a rule that already exists adds no new exposure - there is
+    /// still exactly one rule for that phrase. Refusing the update would trap
+    /// anyone whose store was poisoned before these guards existed, leaving the
+    /// Voice Training delete button as their only escape.
+    static func shouldStore(heard: String, intended: String,
+                            existing: [LearnedCorrection],
+                            checker: WordChecker? = nil) -> Bool {
+        guard isValidMapping(heard: heard, intended: intended) else { return false }
+        if existing.contains(where: { $0.heard.lowercased() == heard.lowercased() }) {
+            return true
+        }
+        return isUsefulMapping(heard: heard, intended: intended,
+                               existing: existing, checker: checker)
     }
 
     /// Lowercased with every non-alphanumeric character removed, so that
@@ -316,8 +362,9 @@ Replace `add` (currently `LearnedStore.swift:45-67`) with:
         let heardTrimmed = normalizePhrase(heard)
         let intendedTrimmed = intended.trimmingCharacters(in: .whitespacesAndNewlines)
         var learned = load()
-        guard isUsefulMapping(heard: heardTrimmed, intended: intendedTrimmed,
-                              existing: learned.corrections) else {
+        guard shouldStore(heard: heardTrimmed, intended: intendedTrimmed,
+                          existing: learned.corrections) else {
+            // Still worth biasing recognition toward the intended wording.
             appendTerm(intendedTrimmed, to: &learned)
             save(learned)
             return false
@@ -752,6 +799,22 @@ four pre-existing self-tests remain green.
 | Low: `_` treated as a word boundary, unlike regex `\b` | Accepted. Underscores do not occur in speech transcripts. |
 | Low: unused `Codable` on `LearnedPair` | Dropped the conformance. The sync plan can add it when something actually serialises it. |
 | Low: misplaced comment in `SystemWordChecker` | Reworded as a doc comment stating the precondition on the parameter. |
+
+**Review findings addressed (Gemini, round 2 — 0 Blocker, 1 High, 1 Medium, 1 Low):**
+
+| Finding | Resolution |
+|---|---|
+| High: `apply` matches inside contractions — `can` rewrites `can't` | **Declined: not a regression.** Reproduced upstream's current `apply`; ICU's `\b` treats `'` as a boundary, so today's code already yields `"CAN't stop"`. This implementation preserves that exactly. Fixing it changes behaviour beyond the collapse bug and belongs in a separate PR. Recorded as a follow-up. |
+| High: `apply` loses the capitalisation of the matched text | **Declined: not a regression.** Upstream already substitutes the stored `intended` verbatim — `"Focus is good"` with `focus`→`phocus` yields `"phocus is good"` today. Case-forcing would also corrupt deliberately-uppercase rules such as `JPEG`. Recorded as a follow-up. |
+| Medium: legacy poison is unrepairable — the guard rejects updates to a pre-existing bad rule | **Adopted, and it is the most valuable finding in either round.** Anyone who poisoned their store before this ships could never fix `have`→`work` by re-correcting. Extracted `shouldStore`, which permits updating a rule whose `heard` already exists: exposure is unchanged (still one rule for that phrase) and the user regains a repair path. Pure, so it is covered by three new self-test cases. |
+| Medium: `zh-Hans-CN` does not map to an installed dictionary by hyphen replacement | Adopted. `SystemWordChecker` now falls back to `NSSpellChecker.language()` when the converted identifier is absent from `availableLanguages`. |
+| Low: use an em-dash in the toast copy | **Declined — conflicts with a project convention.** `~/scripts/CLAUDE.md` states "No em-dashes - use regular dashes or restructure". |
+| Low: acronyms reduce to length 1 and are therefore learnable | Confirmed intentional. `J Peg`→`JPEG` must remain learnable. |
+| Low: redundant lowercasing in `normalizedForComparison` | No action. Called at most twice per candidate mapping, off any hot path. |
+
+**Follow-ups deliberately out of scope for this PR** (both pre-existing, both verified
+against upstream's current `apply`): contraction-boundary matching, and case
+preservation of the matched text.
 
 **Type consistency check:** `isUsefulMapping` takes `existing:`/`checker:` in Tasks 2
 and is called with both in Task 2's test. `add` returns `Bool` in Task 2 and is consumed
