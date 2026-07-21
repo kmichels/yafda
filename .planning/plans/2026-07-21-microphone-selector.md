@@ -182,12 +182,14 @@ enum AudioDevices {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         var size = UInt32(MemoryLayout<CFString?>.size)
-        var value: CFString?
+        // Unmanaged, not CFString?: this property returns a +1 retained object,
+        // and binding it straight to CFString? leaks it past ARC.
+        var value: Unmanaged<CFString>?
         let status = withUnsafeMutablePointer(to: &value) {
             AudioObjectGetPropertyData(id, &address, 0, nil, &size, $0)
         }
         guard status == noErr else { return nil }
-        return value as String?
+        return value?.takeRetainedValue() as String?
     }
 }
 ```
@@ -296,6 +298,11 @@ and add to `AudioRecorder`:
             try input.auAudioUnit.setDeviceID(device.id)
             return device.name
         } catch {
+            // Leaving the unit on a device that failed to select would record
+            // from nothing. Put it back on the system default explicitly.
+            if let fallback = AudioDevices.systemDefaultInput() {
+                try? input.auAudioUnit.setDeviceID(fallback.id)
+            }
             return "\(device.name) unavailable — using system default"
         }
     }
@@ -371,8 +378,17 @@ Expected: FAIL to compile — `cannot find 'MicMonitor' in scope`
 Create `Sources/Murmur/MicMonitor.swift`:
 
 ```swift
+import Accelerate
 import AVFoundation
 import Foundation
+import os
+
+extension Notification.Name {
+    /// Posted around dictation so the settings-view meter releases the device.
+    /// Two AVAudioEngines must not tap the same microphone at once.
+    static let murmurRecordingWillStart = Notification.Name("murmur.recordingWillStart")
+    static let murmurRecordingDidStop = Notification.Name("murmur.recordingDidStop")
+}
 
 /// Live input level for the microphone settings view.
 ///
@@ -381,17 +397,27 @@ import Foundation
 /// the selected device and publishes a level, writing nothing to disk.
 @MainActor
 final class MicMonitor: ObservableObject {
-    /// 0...1, suitable for a progress bar.
+    /// 0...1, suitable for a bar.
     @Published private(set) var level: Float = 0
 
     private let engine = AVAudioEngine()
     private var running = false
+    private var suspended = false
+    private var deviceUID: String?
+    private var poll: Timer?
+    private var observers: [NSObjectProtocol] = []
 
-    /// dBFS window the bar spans. Speech sits around -30 dBFS, so a linear
+    /// Written on the audio render thread, read on the main thread.
+    ///
+    /// A lock rather than hopping to the main actor per buffer: spawning a
+    /// Task inside the tap allocates on a real-time thread and invites
+    /// priority inversion and dropouts.
+    private let latestRMS = OSAllocatedUnfairLock(initialState: Float(0))
+
+    /// dBFS window the bar spans. Speech sits near -30 dBFS, so a linear RMS
     /// scale would look dead.
     private static let floorDB: Float = -60
 
-    /// Maps buffer RMS onto 0...1 through a dB scale.
     static func normalizedLevel(rms: Float) -> Float {
         guard rms > 0 else { return 0 }
         let db = 20 * log10(rms)
@@ -399,48 +425,115 @@ final class MicMonitor: ObservableObject {
         return min(1, db / -floorDB + 1)
     }
 
+    init() {
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: .murmurRecordingWillStart, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.suspendForRecording() }
+            })
+        observers.append(center.addObserver(
+            forName: .murmurRecordingDidStop, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resumeAfterRecording() }
+            })
+        // Unplugging the active microphone changes the engine's topology.
+        // Without this the engine can fault while the settings view is open.
+        observers.append(center.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.running else { return }
+                    let uid = self.deviceUID
+                    self.stop()
+                    self.start(deviceUID: uid)
+                }
+            })
+    }
+
+    deinit {
+        let center = NotificationCenter.default
+        observers.forEach(center.removeObserver)
+    }
+
     func start(deviceUID: String?) {
-        guard !running else { return }
+        self.deviceUID = deviceUID
+        guard !running, !suspended else { return }
         let input = engine.inputNode
         if let deviceUID, let device = AudioDevices.device(uid: deviceUID) {
             try? input.auAudioUnit.setDeviceID(device.id)
         }
         let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { return }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        // vDSP below reads one deinterleaved channel; bail rather than
+        // misread an interleaved buffer as mono.
+        guard format.sampleRate > 0, format.channelCount > 0, !format.isInterleaved
+        else { return }
+
+        let store = latestRMS
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            // Render thread: no allocation, no actor hops, no logging.
             guard let channel = buffer.floatChannelData?[0] else { return }
-            let frames = Int(buffer.frameLength)
+            let frames = vDSP_Length(buffer.frameLength)
             guard frames > 0 else { return }
-            var sum: Float = 0
-            for index in 0..<frames { sum += channel[index] * channel[index] }
-            let rms = (sum / Float(frames)).squareRoot()
-            let target = MicMonitor.normalizedLevel(rms: rms)
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                // Fast attack, slow decay: the bar should jump to speech and
-                // ease back, not flicker on every buffer.
-                self.level = target > self.level
-                    ? target
-                    : self.level * 0.85 + target * 0.15
-            }
+            var rms: Float = 0
+            vDSP_rmsqv(channel, 1, &rms, frames)
+            store.withLock { $0 = rms }
         }
         do {
             try engine.start()
             running = true
+            startPolling()
         } catch {
             input.removeTap(onBus: 0)
         }
     }
 
     func stop() {
-        guard running else { return }
+        poll?.invalidate()
+        poll = nil
+        guard running else { level = 0; return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         running = false
         level = 0
     }
+
+    // MARK: - Recording coordination
+
+    private func suspendForRecording() {
+        suspended = true
+        stop()
+    }
+
+    private func resumeAfterRecording() {
+        suspended = false
+        // Only resume if a view still wants a meter; `deviceUID` is set by start.
+        if poll == nil, deviceUID != nil || Settings.inputDeviceUID != nil {
+            start(deviceUID: deviceUID)
+        }
+    }
+
+    /// Reads the shared value on a timer instead of pushing from the tap, so
+    /// UI updates happen at a display-friendly rate rather than per buffer.
+    private func startPolling() {
+        poll?.invalidate()
+        poll = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let rms = self.latestRMS.withLock { $0 }
+                let target = MicMonitor.normalizedLevel(rms: rms)
+                // Fast attack, slow decay: track speech, do not flicker.
+                self.level = target > self.level
+                    ? target
+                    : self.level * 0.85 + target * 0.15
+            }
+        }
+    }
 }
 ```
+
+**`AudioRecorder` must post the notifications** so the meter yields the device. Post
+`.murmurRecordingWillStart` immediately before `engine.start()` and
+`.murmurRecordingDidStop` after the tap is removed in the stop path
+(`AudioRecorder.swift:60`).
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -472,7 +565,9 @@ microphone card to the settings area, following the surrounding card style
 
 ```swift
     @StateObject private var micMonitor = MicMonitor()
-    @State private var inputDeviceUID: String? = Settings.inputDeviceUID
+    // @AppStorage, not @State: a @State copy seeded from Settings silently
+    // diverges if the preference changes anywhere else.
+    @AppStorage("inputDeviceUID") private var inputDeviceUID: String?
 
     private var microphoneCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -489,7 +584,7 @@ microphone card to the settings area, following the surrounding card style
             }
             .labelsHidden()
             .onChange(of: inputDeviceUID) { _, newValue in
-                Settings.inputDeviceUID = newValue
+                // @AppStorage already persisted it; just re-point the meter.
                 micMonitor.stop()
                 micMonitor.start(deviceUID: newValue)
             }
@@ -535,9 +630,17 @@ Check by hand, and report what you observe rather than assuming:
 
 - [ ] **Step 3: Confirm the monitor releases the device**
 
-The monitor and the recorder must not tap the same device simultaneously. With the
-settings view open, start a dictation and confirm it records normally. If it fails,
-the monitor is holding the device and needs stopping when recording begins.
+`MicMonitor` yields on `.murmurRecordingWillStart` and resumes on
+`.murmurRecordingDidStop`, so verify that handshake actually fires rather than assuming:
+
+1. Open the microphone settings so the meter is running and moving.
+2. Without closing it, hold the dictation key and speak.
+3. The dictation must transcribe normally — if it produces silence or fails, the monitor
+   did not release the device.
+4. After release, the meter should start moving again.
+
+Two engines tapping one device is the failure this guards against, and it only appears
+when the settings view happens to be open, which is exactly when a user is testing mics.
 
 - [ ] **Step 4: Commit**
 
@@ -590,6 +693,20 @@ deadlock or hold the device against the recorder.
 | Persist by UID, not AudioObjectID | 2 (test asserts the round trip) |
 | Level meter confirms the mic is live | 3, 4 |
 | Monitor must not fight the recorder for the device | 3 (`stop()`), 4 step 3 |
+
+**Review findings addressed (Gemini, round 1 — 0 Blocker, 2 High, 4 Medium, 3 Low):**
+
+| Finding | Resolution |
+|---|---|
+| **High: spawning a `Task { @MainActor }` per buffer inside the audio tap violates real-time constraints** | Adopted. The tap now writes RMS into an `OSAllocatedUnfairLock` and a 30 Hz timer reads it on the main actor. No allocation and no actor hop on the render thread. |
+| **High: monitor and recorder can fight over the same device** | Adopted, with a mechanism rather than a warning. `AudioRecorder` posts `.murmurRecordingWillStart` / `.murmurRecordingDidStop`; `MicMonitor` suspends and resumes on those. Task 4 step 3 now verifies the handshake by hand. |
+| Medium: `stringProperty` leaks a +1 retained `CFString` | Adopted — `Unmanaged<CFString>?` plus `takeRetainedValue()`. |
+| Medium: `@State` seeded from `Settings` diverges from the stored preference | Adopted — `@AppStorage("inputDeviceUID")`, which also removes the manual write-back. |
+| Medium: a failed `setDeviceID` leaves the unit pointing at a device that did not select | Adopted — the catch resets to the system default before returning. |
+| Medium: unplugging the active mic while monitoring can fault the engine | Adopted — an `.AVAudioEngineConfigurationChange` observer restarts the monitor. |
+| Low: manual RMS loop is heavy for a render thread | Adopted — `vDSP_rmsqv` from Accelerate, a system framework, so no new dependency. |
+| Low: `floatChannelData?[0]` assumes deinterleaved audio | Adopted — the monitor refuses to start on an interleaved format rather than misreading it. |
+| Low: `installTap` buffer size is a suggestion | No change needed; the code already uses `buffer.frameLength` rather than assuming 1024. |
 
 **Known gaps, deliberate:**
 - No device-change listener; a device appearing or disappearing mid-session is picked up on the next recording or when the settings view is reopened.
