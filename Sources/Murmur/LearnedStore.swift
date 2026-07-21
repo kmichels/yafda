@@ -310,14 +310,21 @@ enum LearnedStore {
 
     /// A re-segmentation moves word boundaries without changing the sounds, and
     /// lands on something that is not itself ordinary language ("base ten" ->
-    /// "Baseten"). A same-boundary punctuation edit ("its" -> "it's") is not
-    /// one, and neither is a split whose joined form is a real word ("set up"
-    /// -> "setup") - both would rewrite ordinary speech wherever it occurs.
+    /// "Baseten"). That only ever happens as a join: the recognizer split one
+    /// term across a whitespace boundary, so the intended side must have
+    /// fewer tokens than the heard side. Expanding one ordinary word into
+    /// several ("apart" -> "a part") is never a re-segmentation, no matter
+    /// how it normalizes - a single common word is the highest-exposure
+    /// rewrite key there is, and treating its expansion as a join would learn
+    /// it globally forever. A same-boundary punctuation edit ("its" -> "it's")
+    /// is not a re-segmentation either, and neither is a split whose joined
+    /// form is a real word ("set up" -> "setup") - both would rewrite
+    /// ordinary speech wherever it occurs.
     private static func isResegmentation(of heard: String, to intended: String,
                                          checker: WordChecker) -> Bool {
         normalizedForComparison(heard) == normalizedForComparison(intended)
             && heard.split(whereSeparator: { $0.isWhitespace }).count
-                != intended.split(whereSeparator: { $0.isWhitespace }).count
+                > intended.split(whereSeparator: { $0.isWhitespace }).count
             && !checker.isOrdinaryPhrase(intended)
     }
 
@@ -378,7 +385,7 @@ enum LearnedStore {
         // MARK: Mapping guards
         let guardChecker = FixedWordChecker(words: [
             "have", "work", "he", "caught", "base", "ten", "so", "my", "a", "focus", "its",
-            "set", "up", "setup",
+            "set", "up", "setup", "apart", "part",
         ])
         let existing = [LearnedCorrection(heard: "focus", intended: "Phocus")]
         let guardCases: [(heard: String, intended: String, useful: Bool, why: String)] = [
@@ -392,6 +399,7 @@ enum LearnedStore {
             ("Phocus", "focus", false, "reverse of an existing mapping"),
             ("its", "it's", false, "punctuation edit on an ordinary word is not a re-segmentation"),
             ("set up", "setup", false, "a split whose joined form is a real word is not a re-segmentation"),
+            ("apart", "a part", false, "expanding one ordinary word is not a re-segmentation"),
         ]
         for testCase in guardCases {
             let got = LearnedStore.isUsefulMapping(
