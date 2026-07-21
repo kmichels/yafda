@@ -243,6 +243,26 @@ enum LearnedStore {
             print("\(ok ? "PASS" : "FAIL"): diff(\"\(testCase.original)\" → " +
                   "\"\(testCase.corrected)\") = \(got)")
         }
+
+        // MARK: Ordinary-speech detection
+        let checker = FixedWordChecker(words: ["have", "work", "base", "ten", "he", "caught"])
+        let wordCases: [(phrase: String, ordinary: Bool)] = [
+            ("have", true),            // plain dictionary word
+            ("he caught", true),       // every token ordinary
+            ("Lightrim", false),       // not a word
+            ("hecon Phocus", false),   // neither token a word
+            ("X2D2", false),           // digits are never ordinary speech
+            ("J", false),              // single letters spell-check clean but are not words
+            ("", false),               // no tokens
+        ]
+        for testCase in wordCases {
+            let got = checker.isOrdinaryPhrase(testCase.phrase)
+            let ok = got == testCase.ordinary
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): ordinary(\"\(testCase.phrase)\") = \(got)" +
+                  (ok ? "" : " (expected \(testCase.ordinary))"))
+        }
+
         return passed
     }
 }
