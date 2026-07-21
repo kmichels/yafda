@@ -16,6 +16,41 @@ struct LearnedData: Codable {
     var terms: [String] = []
 }
 
+/// One misheard -> intended mapping considered during a transcript fix.
+struct LearnedPair: Equatable {
+    var heard: String
+    var intended: String
+}
+
+/// What a transcript fix taught Murmur, and what it declined to learn.
+struct LearnOutcome: Equatable {
+    var learned: [LearnedPair] = []
+    var skipped: [LearnedPair] = []
+
+    /// Names both outcomes so a rejected mapping is visible rather than silent.
+    /// Long lists are capped - the toast is a one-line hint, not a report, and
+    /// a transcript rewritten heavily can produce a dozen candidates.
+    var summary: String {
+        var parts: [String] = []
+        if !learned.isEmpty {
+            parts.append("Learned " + Self.list(
+                learned.map { "“\($0.heard)” → “\($0.intended)”" }))
+        }
+        if !skipped.isEmpty {
+            parts.append("Skipped " + Self.list(skipped.map { "“\($0.heard)”" })
+                + " - too common to rewrite safely")
+        }
+        guard !parts.isEmpty else { return "Transcript updated." }
+        return parts.joined(separator: ". ") + "."
+    }
+
+    /// Joins up to two items, summarising any remainder as a count.
+    private static func list(_ items: [String]) -> String {
+        guard items.count > 2 else { return items.joined(separator: ", ") }
+        return items.prefix(2).joined(separator: ", ") + " and \(items.count - 2) more"
+    }
+}
+
 /// Murmur's pronunciation memory. Populated by the Voice Training page and
 /// by corrections the user makes to transcripts in History. Used two ways:
 /// 1. `apply(in:)` fixes known mishearings in every transcript.
@@ -112,14 +147,20 @@ enum LearnedStore {
     }
 
     /// Learns from a user-corrected transcript: extracts word-level
-    /// substitutions and stores each. Returns how many were learned.
+    /// substitutions and stores those that pass the guards.
+    /// - Returns: the mappings learned and those skipped.
     @discardableResult
-    static func learn(original: String, corrected: String) -> Int {
-        let pairs = extractCorrections(original: original, corrected: corrected)
-        for pair in pairs {
-            add(heard: pair.heard, intended: pair.intended)
+    static func learn(original: String, corrected: String) -> LearnOutcome {
+        var outcome = LearnOutcome()
+        for candidate in extractCorrections(original: original, corrected: corrected) {
+            let pair = LearnedPair(heard: candidate.heard, intended: candidate.intended)
+            if add(heard: candidate.heard, intended: candidate.intended) {
+                outcome.learned.append(pair)
+            } else {
+                outcome.skipped.append(pair)
+            }
         }
-        return pairs.count
+        return outcome
     }
 
     // MARK: - Using the knowledge
@@ -566,6 +607,35 @@ enum LearnedStore {
             let ok = testCase.got == testCase.expected
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): apply/\(testCase.name) = \"\(testCase.got)\"" +
+                  (ok ? "" : " (expected \"\(testCase.expected)\")"))
+        }
+
+        // MARK: Outcome summaries
+        let summaryCases: [(outcome: LearnOutcome, expected: String)] = [
+            (LearnOutcome(), "Transcript updated."),
+            (LearnOutcome(learned: [LearnedPair(heard: "Lightrim", intended: "Lightroom")],
+                          skipped: []),
+             "Learned “Lightrim” → “Lightroom”."),
+            (LearnOutcome(learned: [],
+                          skipped: [LearnedPair(heard: "have", intended: "work")]),
+             "Skipped “have” - too common to rewrite safely."),
+            (LearnOutcome(learned: [LearnedPair(heard: "JPIG", intended: "JPEG")],
+                          skipped: [LearnedPair(heard: "my", intended: "a")]),
+             "Learned “JPIG” → “JPEG”. Skipped “my” - too common to rewrite safely."),
+            // A heavily rewritten transcript must not produce an unbounded toast.
+            (LearnOutcome(learned: [], skipped: [
+                LearnedPair(heard: "my", intended: "a"),
+                LearnedPair(heard: "have", intended: "work"),
+                LearnedPair(heard: "God", intended: "guide"),
+                LearnedPair(heard: "form", intended: "forum"),
+             ]),
+             "Skipped “my”, “have” and 2 more - too common to rewrite safely."),
+        ]
+        for testCase in summaryCases {
+            let got = testCase.outcome.summary
+            let ok = got == testCase.expected
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): summary = \"\(got)\"" +
                   (ok ? "" : " (expected \"\(testCase.expected)\")"))
         }
 

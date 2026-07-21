@@ -204,16 +204,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     /// Applies a user correction to a transcript and learns the
-    /// misheard → intended word mappings from it. Returns how many were learned.
+    /// misheard -> intended mappings from it.
+    /// - Returns: what was learned and what was skipped.
     @discardableResult
-    func correctHistoryEntry(id: String, newText: String) -> Int {
+    func correctHistoryEntry(id: String, newText: String) -> LearnOutcome {
         guard let entry = history.entries.first(where: { $0.id == id }),
-              entry.text != newText else { return 0 }
-        let learnedCount = LearnedStore.learn(original: entry.text, corrected: newText)
+              entry.text != newText else { return LearnOutcome() }
+        let outcome = LearnedStore.learn(original: entry.text, corrected: newText)
         history.update(id: id, text: newText)
         entries = history.entries
         rebuildMenu()
-        return learnedCount
+        return outcome
     }
 
     /// Raw transcription without biasing or cleanup — used by Voice Training
