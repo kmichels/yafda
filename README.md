@@ -1,5 +1,9 @@
 # Murmur 🎙️
 
+> **This is a fork** of [janisbelozerovs-dev/murmur](https://github.com/janisbelozerovs-dev/murmur)
+> by Janis Belozerovs, MIT licensed, with thanks. It follows its own roadmap and is not
+> affiliated with upstream. Fixes that apply to both are sent back as pull requests.
+
 **Private, unlimited voice dictation for macOS — 100% on-device.**
 
 Hold `fn`, speak, release — clean text appears at your cursor in any app.
