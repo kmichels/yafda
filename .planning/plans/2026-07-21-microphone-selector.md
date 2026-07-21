@@ -383,29 +383,31 @@ import AVFoundation
 import Foundation
 import os
 
-extension Notification.Name {
-    /// Posted around dictation so the settings-view meter releases the device.
-    /// Two AVAudioEngines must not tap the same microphone at once.
-    static let murmurRecordingWillStart = Notification.Name("murmur.recordingWillStart")
-    static let murmurRecordingDidStop = Notification.Name("murmur.recordingDidStop")
-}
-
 /// Live input level for the microphone settings view.
 ///
 /// A picker alone cannot answer "is this microphone actually hearing me",
 /// which is the question that matters when several are connected. This taps
 /// the selected device and publishes a level, writing nothing to disk.
+///
+/// A shared instance rather than one per view: only one meter can hold the
+/// input device, and `AudioRecorder` has to be able to make it yield
+/// **synchronously** before starting its own engine.
 @MainActor
 final class MicMonitor: ObservableObject {
+    static let shared = MicMonitor()
+
     /// 0...1, suitable for a bar.
     @Published private(set) var level: Float = 0
 
     private let engine = AVAudioEngine()
     private var running = false
     private var suspended = false
+    /// Set by the settings view. Without it, a dictation that ends after the
+    /// view closed would restart the meter invisibly in the background.
+    private var isVisible = false
     private var deviceUID: String?
     private var poll: Timer?
-    private var observers: [NSObjectProtocol] = []
+    private var configObserver: NSObjectProtocol?
 
     /// Written on the audio render thread, read on the main thread.
     ///
@@ -425,19 +427,10 @@ final class MicMonitor: ObservableObject {
         return min(1, db / -floorDB + 1)
     }
 
-    init() {
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(
-            forName: .murmurRecordingWillStart, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.suspendForRecording() }
-            })
-        observers.append(center.addObserver(
-            forName: .murmurRecordingDidStop, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.resumeAfterRecording() }
-            })
+    private init() {
         // Unplugging the active microphone changes the engine's topology.
         // Without this the engine can fault while the settings view is open.
-        observers.append(center.addObserver(
+        configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -446,17 +439,44 @@ final class MicMonitor: ObservableObject {
                     self.stop()
                     self.start(deviceUID: uid)
                 }
-            })
+            }
     }
 
-    deinit {
-        let center = NotificationCenter.default
-        observers.forEach(center.removeObserver)
+    // MARK: - View lifecycle
+
+    func viewAppeared(deviceUID: String?) {
+        isVisible = true
+        start(deviceUID: deviceUID)
     }
+
+    func viewDisappeared() {
+        isVisible = false
+        stop()
+    }
+
+    // MARK: - Recording handover
+    //
+    // Called DIRECTLY by AudioRecorder, not through NotificationCenter: an
+    // observer registered with `queue: .main` runs asynchronously, so the
+    // recorder could start its engine before this one had released the
+    // device, and both would contend for the hardware.
+
+    func suspendForRecording() {
+        suspended = true
+        stop()
+    }
+
+    func resumeAfterRecording() {
+        suspended = false
+        guard isVisible else { return }
+        start(deviceUID: deviceUID)
+    }
+
+    // MARK: - Engine
 
     func start(deviceUID: String?) {
         self.deviceUID = deviceUID
-        guard !running, !suspended else { return }
+        guard !running, !suspended, isVisible else { return }
         let input = engine.inputNode
         if let deviceUID, let device = AudioDevices.device(uid: deviceUID) {
             try? input.auAudioUnit.setDeviceID(device.id)
@@ -489,26 +509,12 @@ final class MicMonitor: ObservableObject {
     func stop() {
         poll?.invalidate()
         poll = nil
-        guard running else { level = 0; return }
+        level = 0
+        guard running else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        engine.reset()
         running = false
-        level = 0
-    }
-
-    // MARK: - Recording coordination
-
-    private func suspendForRecording() {
-        suspended = true
-        stop()
-    }
-
-    private func resumeAfterRecording() {
-        suspended = false
-        // Only resume if a view still wants a meter; `deviceUID` is set by start.
-        if poll == nil, deviceUID != nil || Settings.inputDeviceUID != nil {
-            start(deviceUID: deviceUID)
-        }
     }
 
     /// Reads the shared value on a timer instead of pushing from the tap, so
@@ -530,10 +536,16 @@ final class MicMonitor: ObservableObject {
 }
 ```
 
-**`AudioRecorder` must post the notifications** so the meter yields the device. Post
-`.murmurRecordingWillStart` immediately before `engine.start()` and
-`.murmurRecordingDidStop` after the tap is removed in the stop path
-(`AudioRecorder.swift:60`).
+**`AudioRecorder` hands the device over directly.** Call
+`MicMonitor.shared.suspendForRecording()` immediately before selecting the device and
+starting the engine, and `MicMonitor.shared.resumeAfterRecording()` after the tap is
+removed in the stop path (`AudioRecorder.swift:60`). Both calls are synchronous, which
+is the point — a notification would let the recorder start while the meter still held
+the hardware.
+
+Also call `engine.reset()` before `selectInputDevice` in `AudioRecorder`: the engine
+instance is reused across recordings, and changing an already-configured audio unit's
+device can fail silently.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -564,7 +576,9 @@ microphone card to the settings area, following the surrounding card style
 (`Palette.card`, `RoundedRectangle(cornerRadius: 16)`, `.padding(20)`):
 
 ```swift
-    @StateObject private var micMonitor = MicMonitor()
+    // Shared, not @StateObject: AudioRecorder must be able to make this exact
+    // instance yield the device before it starts recording.
+    @ObservedObject private var micMonitor = MicMonitor.shared
     // @AppStorage, not @State: a @State copy seeded from Settings silently
     // diverges if the preference changes anywhere else.
     @AppStorage("inputDeviceUID") private var inputDeviceUID: String?
@@ -608,8 +622,8 @@ microphone card to the settings area, following the surrounding card style
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
-        .onAppear { micMonitor.start(deviceUID: inputDeviceUID) }
-        .onDisappear { micMonitor.stop() }
+        .onAppear { micMonitor.viewAppeared(deviceUID: inputDeviceUID) }
+        .onDisappear { micMonitor.viewDisappeared() }
     }
 ```
 
@@ -707,6 +721,17 @@ deadlock or hold the device against the recorder.
 | Low: manual RMS loop is heavy for a render thread | Adopted — `vDSP_rmsqv` from Accelerate, a system framework, so no new dependency. |
 | Low: `floatChannelData?[0]` assumes deinterleaved audio | Adopted — the monitor refuses to start on an interleaved format rather than misreading it. |
 | Low: `installTap` buffer size is a suggestion | No change needed; the code already uses `buffer.frameLength` rather than assuming 1024. |
+
+**Review findings addressed (Gemini, round 2 — 0 Blocker, 1 High, 3 Medium, 2 Low):**
+
+| Finding | Resolution |
+|---|---|
+| **High: the notification handover is asynchronous, so the recorder could start while the meter still held the device** | Adopted, and it invalidated round 1's own fix. `addObserver(queue: .main)` enqueues the block rather than running it inline, even when posted from the main thread. Replaced with `MicMonitor.shared` and direct synchronous `suspendForRecording()` / `resumeAfterRecording()` calls. |
+| Medium: changing `setDeviceID` on a reused, already-configured engine can fail silently | Adopted. `AudioRecorder` calls `engine.reset()` before selecting, and `MicMonitor.stop()` resets its own engine too. |
+| Medium: the meter could resume in the background if dictation ended after the settings view closed | Adopted. An `isVisible` flag set by `viewAppeared`/`viewDisappeared` gates both `start` and `resumeAfterRecording`. |
+| Medium: `OSAllocatedUnfairLock` needs macOS 13+ | Non-issue, verified: `Package.swift:6` declares `.macOS(.v26)`. |
+| Low: virtual and aggregate devices (BlackHole, Teams) will appear in the picker | Accepted. They are legitimate input devices and filtering by name would be guesswork. |
+| Low: a Mac with no inputs may report default device id 0 | Already safe — `inputDevices().first { $0.id == deviceID }` returns nil, and the enumeration test is written to pass vacuously on such a machine. |
 
 **Known gaps, deliberate:**
 - No device-change listener; a device appearing or disappearing mid-session is picked up on the next recording or when the settings view is reopened.
