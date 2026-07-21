@@ -127,10 +127,11 @@ struct SystemWordChecker: WordChecker {
         language = localeIdentifier.replacingOccurrences(of: "-", with: "_")
     }
 
+    /// - Important: `token` must already be lowercased by `isOrdinaryWord`.
+    ///   The spell checker accepts any capitalised token as a proper noun, so
+    ///   checking raw input would report nearly every phrase as ordinary and
+    ///   reject nearly every mapping.
     func isKnownWord(_ token: String) -> Bool {
-        // Lowercasing before this call matters: the spell checker accepts any
-        // capitalised token as a proper noun, which would make nearly every
-        // phrase "ordinary" and reject nearly every mapping.
         NSSpellChecker.shared.checkSpelling(
             of: token, startingAt: 0, language: language, wrap: false,
             inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
@@ -323,9 +324,16 @@ Replace `add` (currently `LearnedStore.swift:45-67`) with:
         }
         if let index = learned.corrections.firstIndex(where: {
             $0.heard.lowercased() == heardTrimmed.lowercased()
-                && $0.intended == intendedTrimmed
         }) {
-            learned.corrections[index].timesSeen += 1
+            if learned.corrections[index].intended == intendedTrimmed {
+                learned.corrections[index].timesSeen += 1
+            } else {
+                // One misheard phrase maps to one intended phrase. Storing both
+                // would leave a dead rule and force apply() to choose between
+                // them; the newer correction is the user's current intent.
+                learned.corrections[index].intended = intendedTrimmed
+                learned.corrections[index].timesSeen = 1
+            }
         } else {
             learned.corrections.append(LearnedCorrection(
                 heard: heardTrimmed, intended: intendedTrimmed))
@@ -390,6 +398,16 @@ Add to `LearnedStore.runSelfTest()` before `return passed`:
              ]),
              "defocused"),
             ("empty corpus", LearnedStore.apply(in: "untouched", using: []), "untouched"),
+            // Equal-length rules must not resolve by input order.
+            ("ties deterministic",
+             LearnedStore.apply(in: "cat", using: [
+                LearnedCorrection(heard: "cat", intended: "dog"),
+                LearnedCorrection(heard: "cat", intended: "cow"),
+             ]),
+             LearnedStore.apply(in: "cat", using: [
+                LearnedCorrection(heard: "cat", intended: "cow"),
+                LearnedCorrection(heard: "cat", intended: "dog"),
+             ])),
         ]
         for testCase in applyCases {
             let ok = testCase.got == testCase.expected
@@ -423,8 +441,14 @@ Replace `apply(in:)` (currently `LearnedStore.swift:101-115`) with:
     /// input once makes the result independent of correction order.
     static func apply(in text: String, using corrections: [LearnedCorrection]) -> String {
         guard !corrections.isEmpty else { return text }
-        // Longest first so overlapping mappings resolve predictably.
-        let ordered = corrections.sorted { $0.heard.count > $1.heard.count }
+        // Longest first so overlapping mappings resolve predictably. The
+        // secondary keys make the ordering total: Swift's sort is not
+        // guaranteed stable, so equal-length rules would otherwise resolve
+        // differently between runs and defeat the point of a single pass.
+        let ordered = corrections.sorted {
+            ($0.heard.count, $0.heard, $0.intended)
+                > ($1.heard.count, $1.heard, $1.intended)
+        }
         var result = ""
         var index = text.startIndex
         while index < text.endIndex {
@@ -518,6 +542,14 @@ Add to `LearnedStore.runSelfTest()` before `return passed`:
             (LearnOutcome(learned: [LearnedPair(heard: "JPIG", intended: "JPEG")],
                           skipped: [LearnedPair(heard: "my", intended: "a")]),
              "Learned “JPIG” → “JPEG”. Skipped “my” - too common to rewrite safely."),
+            // A heavily rewritten transcript must not produce an unbounded toast.
+            (LearnOutcome(learned: [], skipped: [
+                LearnedPair(heard: "my", intended: "a"),
+                LearnedPair(heard: "have", intended: "work"),
+                LearnedPair(heard: "God", intended: "guide"),
+                LearnedPair(heard: "form", intended: "forum"),
+             ]),
+             "Skipped “my”, “have” and 2 more - too common to rewrite safely."),
         ]
         for testCase in summaryCases {
             let got = testCase.outcome.summary
@@ -539,7 +571,7 @@ In `LearnedStore.swift`, add after `struct LearnedData` (currently ends line 17)
 
 ```swift
 /// One misheard -> intended mapping considered during a transcript fix.
-struct LearnedPair: Codable, Equatable {
+struct LearnedPair: Equatable {
     var heard: String
     var intended: String
 }
@@ -550,20 +582,26 @@ struct LearnOutcome: Equatable {
     var skipped: [LearnedPair] = []
 
     /// Names both outcomes so a rejected mapping is visible rather than silent.
+    /// Long lists are capped - the toast is a one-line hint, not a report, and
+    /// a transcript rewritten heavily can produce a dozen candidates.
     var summary: String {
         var parts: [String] = []
         if !learned.isEmpty {
-            parts.append("Learned " + learned
-                .map { "“\($0.heard)” → “\($0.intended)”" }
-                .joined(separator: ", "))
+            parts.append("Learned " + Self.list(
+                learned.map { "“\($0.heard)” → “\($0.intended)”" }))
         }
         if !skipped.isEmpty {
-            parts.append("Skipped " + skipped
-                .map { "“\($0.heard)”" }
-                .joined(separator: ", ") + " - too common to rewrite safely")
+            parts.append("Skipped " + Self.list(skipped.map { "“\($0.heard)”" })
+                + " - too common to rewrite safely")
         }
         guard !parts.isEmpty else { return "Transcript updated." }
         return parts.joined(separator: ". ") + "."
+    }
+
+    /// Joins up to two items, summarising any remainder as a count.
+    private static func list(_ items: [String]) -> String {
+        guard items.count > 2 else { return items.joined(separator: ", ") }
+        return items.prefix(2).joined(separator: ", ") + " and \(items.count - 2) more"
     }
 }
 ```
@@ -703,9 +741,17 @@ four pre-existing self-tests remain green.
 | PR adds no logging | all |
 | Gemini panel review before PR | 5 |
 
-**Known gap, deliberate:** `LearnedPair` is declared `Codable` although nothing
-serialises it yet. That is groundwork for the sync plan's tombstones and costs one
-protocol conformance; if the panel review flags it as unused, drop the conformance.
+**Review findings addressed (Gemini, round 1 — 0 Blocker, 1 High, 1 Medium, 1 Low):**
+
+| Finding | Resolution |
+|---|---|
+| High: duplicate `heard` with differing `intended` leaves a dead rule and an arbitrary winner | `add` now matches on `heard` alone and overwrites `intended`, resetting `timesSeen`. Also hardened the sort — Swift's `sorted(by:)` is not stable, so equal-length rules were non-deterministic; the ordering is now total on `(count, heard, intended)`, with a regression test. |
+| High: `learnFeedback` might be `Int?` | Not applicable. Verified `MainView.swift:361` already declares `@State private var learnFeedback: String?`. No change needed. |
+| Medium: toast could overflow on a heavily rewritten transcript | `LearnOutcome.summary` caps at two named items plus "and N more", with a test. |
+| Medium: `NSSpellChecker` first-call hitch; warm it up at launch | Declined. The checker is only reached from "Save & Learn" and Voice Training, both interactive; it is never on the dictation path (`apply` does not consult it). A speculative warm-up would add launch code to a PR whose value is a bug fix. |
+| Low: `_` treated as a word boundary, unlike regex `\b` | Accepted. Underscores do not occur in speech transcripts. |
+| Low: unused `Codable` on `LearnedPair` | Dropped the conformance. The sync plan can add it when something actually serialises it. |
+| Low: misplaced comment in `SystemWordChecker` | Reworded as a doc comment stating the precondition on the parameter. |
 
 **Type consistency check:** `isUsefulMapping` takes `existing:`/`checker:` in Tasks 2
 and is called with both in Task 2's test. `add` returns `Bool` in Task 2 and is consumed
