@@ -38,7 +38,7 @@ struct LearnOutcome: Equatable {
         }
         if !skipped.isEmpty {
             parts.append("Skipped " + Self.list(skipped.map { "“\($0.heard)”" })
-                + " — too common to rewrite safely")
+                + " — manage rules in Voice Training, not as an automatic rewrite")
         }
         guard !parts.isEmpty else { return "Transcript updated." }
         return parts.joined(separator: ". ") + "."
@@ -63,12 +63,9 @@ enum LearnedStore {
     }
 
     /// Checker used to decide whether an automatically-diffed mapping is safe
-    /// to store. Overridable so self-tests are deterministic.
-    ///
-    /// Only ever touched from the main actor (transcript fixes and Voice
-    /// Training are both UI actions); marked explicitly so a future move to
-    /// Swift 6 language mode does not turn this into a build error.
-    nonisolated(unsafe) static var wordChecker: WordChecker = SystemWordChecker()
+    /// to store, when no `checker:` is injected. Self-tests never rely on
+    /// this default - they always pass their own `FixedWordChecker` instead.
+    private static let defaultWordChecker: WordChecker = SystemWordChecker()
 
     static func load() -> LearnedData {
         guard let data = try? Data(contentsOf: fileURL),
@@ -100,32 +97,51 @@ enum LearnedStore {
             save(learned)
             return false
         }
-        if let index = learned.corrections.firstIndex(where: {
-            $0.heard.lowercased() == heardTrimmed.lowercased()
-        }) {
-            var updated = learned.corrections.remove(at: index)
-            if updated.intended == intendedTrimmed {
-                updated.timesSeen += 1
-            } else {
-                // One misheard phrase maps to one intended phrase. Storing both
-                // would leave a dead rule and force apply() to choose between
-                // them; the newer correction is the user's current intent.
-                updated.intended = intendedTrimmed
-                updated.timesSeen = 1
-            }
-            // Re-append so the 300-item cap, which evicts from the front,
-            // discards stale rules rather than ones still being corrected.
-            learned.corrections.append(updated)
-        } else {
-            learned.corrections.append(LearnedCorrection(
-                heard: heardTrimmed, intended: intendedTrimmed))
-        }
+        learned.corrections = merging(learned.corrections,
+                                      heard: heardTrimmed, intended: intendedTrimmed)
         if learned.corrections.count > 300 {
             learned.corrections.removeFirst(learned.corrections.count - 300)
         }
         appendTerm(intendedTrimmed, to: &learned)
         save(learned)
         return true
+    }
+
+    /// Folds `heard -> intended` into `corrections`, collapsing every existing
+    /// rule for that phrase into one.
+    ///
+    /// Stores written before these guards existed used (heard, intended) as the
+    /// duplicate key, so they can hold several rules for one phrase. Leaving any
+    /// behind would let apply() pick a stale rule after the user repairs one.
+    static func merging(_ corrections: [LearnedCorrection],
+                        heard: String, intended: String) -> [LearnedCorrection] {
+        var result = corrections
+        var removed: [LearnedCorrection] = []
+        var index = 0
+        while index < result.count {
+            if result[index].heard.lowercased() == heard.lowercased() {
+                removed.append(result.remove(at: index))
+            } else {
+                index += 1
+            }
+        }
+        var merged = LearnedCorrection(heard: heard, intended: intended)
+        // Preserve the first removed rule's id so the Voice Training delete
+        // button keeps pointing at the same row across a repair.
+        if let firstID = removed.first?.id {
+            merged.id = firstID
+        }
+        // Only a removed rule for the same intended phrase speaks to how many
+        // times this exact mapping has been confirmed; a rule with a
+        // different intended was a different correction entirely.
+        if let priorTimesSeen = removed.filter({ $0.intended == intended })
+            .map(\.timesSeen).max() {
+            merged.timesSeen = priorTimesSeen + 1
+        } else {
+            merged.timesSeen = 1
+        }
+        result.append(merged)
+        return result
     }
 
     /// Remembers a term for recognition biasing without any mapping.
@@ -362,7 +378,7 @@ enum LearnedStore {
     private static func isUsefulMapping(heard: String, intended: String,
                                         existing: [LearnedCorrection],
                                         checker: WordChecker?) -> Bool {
-        let checker = checker ?? wordChecker
+        let checker = checker ?? defaultWordChecker
         guard isValidMapping(heard: heard, intended: intended) else { return false }
 
         // A correction fires as a global whole-word rewrite. If the misheard
@@ -619,14 +635,14 @@ enum LearnedStore {
              "Learned “Lightrim” → “Lightroom”."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work")]),
-             "Skipped “have” — too common to rewrite safely."),
+             "Skipped “have” — manage rules in Voice Training, not as an automatic rewrite."),
             (LearnOutcome(learned: [LearnedPair(heard: "JPIG", intended: "JPEG")],
                           skipped: [LearnedPair(heard: "my", intended: "a")]),
-             "Learned “JPIG” → “JPEG”. Skipped “my” — too common to rewrite safely."),
+             "Learned “JPIG” → “JPEG”. Skipped “my” — manage rules in Voice Training, not as an automatic rewrite."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work"),
                                     LearnedPair(heard: "my", intended: "a")]),
-             "Skipped “have” and “my” — too common to rewrite safely."),
+             "Skipped “have” and “my” — manage rules in Voice Training, not as an automatic rewrite."),
             // A heavily rewritten transcript must not produce an unbounded toast.
             (LearnOutcome(learned: [], skipped: [
                 LearnedPair(heard: "my", intended: "a"),
@@ -634,7 +650,7 @@ enum LearnedStore {
                 LearnedPair(heard: "God", intended: "guide"),
                 LearnedPair(heard: "form", intended: "forum"),
              ]),
-             "Skipped “my”, “have” and 2 more — too common to rewrite safely."),
+             "Skipped “my”, “have” and 2 more — manage rules in Voice Training, not as an automatic rewrite."),
         ]
         for testCase in summaryCases {
             let got = testCase.outcome.summary
@@ -643,6 +659,57 @@ enum LearnedStore {
             print("\(ok ? "PASS" : "FAIL"): summary = \"\(got)\"" +
                   (ok ? "" : " (expected \"\(testCase.expected)\")"))
         }
+
+        // MARK: Merging duplicate rules
+        // Stores written before these guards existed used (heard, intended) as
+        // the duplicate key, so a store can hold several rules for one heard
+        // phrase. merging() must collapse every one of them so apply() cannot
+        // pick a stale rule after the user repairs it.
+        let mergeCases: [(name: String, before: [LearnedCorrection], heard: String,
+                          intended: String, expectedIntended: String,
+                          expectedTimesSeen: Int)] = [
+            ("legacy duplicates collapse",
+             [LearnedCorrection(heard: "have", intended: "work"),
+              LearnedCorrection(heard: "have", intended: "halve")],
+             "have", "half", "half", 1),
+            ("repeat mapping increments",
+             [LearnedCorrection(heard: "have", intended: "work")],
+             "have", "work", "work", 2),
+            ("new phrase appends",
+             [], "Lightrim", "Lightroom", "Lightroom", 1),
+        ]
+        for testCase in mergeCases {
+            let merged = LearnedStore.merging(testCase.before, heard: testCase.heard,
+                                              intended: testCase.intended)
+            let rules = merged.filter { $0.heard.lowercased() == testCase.heard.lowercased() }
+            let ok = rules.count == 1
+                && rules[0].intended == testCase.expectedIntended
+                && rules[0].timesSeen == testCase.expectedTimesSeen
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): merging(\(testCase.name)) = " +
+                  "\(merged.map { "\($0.heard)->\($0.intended)(\($0.timesSeen))" })")
+        }
+
+        // Unrelated rules must survive a merge targeting a different phrase.
+        let unrelatedBefore = [LearnedCorrection(heard: "alpha", intended: "beta"),
+                               LearnedCorrection(heard: "have", intended: "work")]
+        let unrelatedMerged = LearnedStore.merging(unrelatedBefore, heard: "have", intended: "half")
+        let unrelatedOK = unrelatedMerged.contains { $0.heard == "alpha" && $0.intended == "beta" }
+        if !unrelatedOK { passed = false }
+        print("\(unrelatedOK ? "PASS" : "FAIL"): merging(unrelated rules preserved) = " +
+              "\(unrelatedMerged.map { "\($0.heard)->\($0.intended)" })")
+
+        // End-to-end through the real apply: after collapsing legacy
+        // duplicates, the repair actually changes what apply() produces -
+        // this is the bug the whole fix exists to close.
+        let repaired = LearnedStore.apply(in: "I have it", using: LearnedStore.merging(
+            [LearnedCorrection(heard: "have", intended: "work"),
+             LearnedCorrection(heard: "have", intended: "halve")],
+            heard: "have", intended: "half"))
+        let repairedOK = repaired == "I half it"
+        if !repairedOK { passed = false }
+        print("\(repairedOK ? "PASS" : "FAIL"): apply/merged repair = \"\(repaired)\"" +
+              (repairedOK ? "" : " (expected \"I half it\")"))
 
         return passed
     }
