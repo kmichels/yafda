@@ -83,19 +83,18 @@ enum LearnedStore {
 
     // MARK: - Recording new knowledge
 
-    /// Adds one mapping (merging duplicates) and remembers the intended term.
+    /// Applies one mapping to an in-memory store.
     /// - Returns: whether the mapping was stored. A rejected mapping still
     ///   contributes its intended wording as a recognition-bias term.
-    @discardableResult
-    static func add(heard: String, intended: String) -> Bool {
+    static func record(heard: String, intended: String,
+                       in learned: inout LearnedData,
+                       checker: WordChecker? = nil) -> Bool {
         let heardTrimmed = normalizePhrase(heard)
         let intendedTrimmed = intended.trimmingCharacters(in: .whitespacesAndNewlines)
-        var learned = load()
         guard shouldStore(heard: heardTrimmed, intended: intendedTrimmed,
-                          existing: learned.corrections) else {
+                          existing: learned.corrections, checker: checker) else {
             // Still worth biasing recognition toward the intended wording.
             appendTerm(intendedTrimmed, to: &learned)
-            save(learned)
             return false
         }
         learned.corrections = merging(learned.corrections,
@@ -104,8 +103,18 @@ enum LearnedStore {
             learned.corrections.removeFirst(learned.corrections.count - 300)
         }
         appendTerm(intendedTrimmed, to: &learned)
-        save(learned)
         return true
+    }
+
+    /// Adds one mapping (merging duplicates) and remembers the intended term.
+    /// - Returns: whether the mapping was stored. A rejected mapping still
+    ///   contributes its intended wording as a recognition-bias term.
+    @discardableResult
+    static func add(heard: String, intended: String) -> Bool {
+        var learned = load()
+        let stored = record(heard: heard, intended: intended, in: &learned)
+        save(learned)
+        return stored
     }
 
     /// Folds `heard -> intended` into `corrections`, collapsing every existing
@@ -170,14 +179,16 @@ enum LearnedStore {
     @discardableResult
     static func learn(original: String, corrected: String) -> LearnOutcome {
         var outcome = LearnOutcome()
+        var learned = load()
         for candidate in extractCorrections(original: original, corrected: corrected) {
             let pair = LearnedPair(heard: candidate.heard, intended: candidate.intended)
-            if add(heard: candidate.heard, intended: candidate.intended) {
+            if record(heard: candidate.heard, intended: candidate.intended, in: &learned) {
                 outcome.learned.append(pair)
             } else {
                 outcome.skipped.append(pair)
             }
         }
+        save(learned)
         return outcome
     }
 
@@ -711,6 +722,62 @@ enum LearnedStore {
         if !repairedOK { passed = false }
         print("\(repairedOK ? "PASS" : "FAIL"): apply/merged repair = \"\(repaired)\"" +
               (repairedOK ? "" : " (expected \"I half it\")"))
+
+        // MARK: record() - the disk-free core that add() and learn() both drive
+        // add() and learn() each hide the in-memory store behind their own
+        // load/save, so record() is the only seam where these cases can see
+        // the store directly.
+        let recordChecker = FixedWordChecker(words: ["have", "work"])
+
+        var storedLearned = LearnedData()
+        let storedResult = LearnedStore.record(
+            heard: "Lightrim", intended: "Lightroom",
+            in: &storedLearned, checker: recordChecker)
+        let storedOK = storedResult
+            && storedLearned.corrections.contains {
+                $0.heard == "Lightrim" && $0.intended == "Lightroom"
+            }
+        if !storedOK { passed = false }
+        print("\(storedOK ? "PASS" : "FAIL"): record(\"Lightrim\" -> \"Lightroom\") = " +
+              "\(storedResult), corrections = " +
+              "\(storedLearned.corrections.map { "\($0.heard)->\($0.intended)" })")
+
+        // Refused by the ordinary-speech guard: both words are in the
+        // checker's dictionary, so this must not become a global rewrite -
+        // but the intended wording still gets remembered for bias.
+        var refusedLearned = LearnedData()
+        let refusedResult = LearnedStore.record(
+            heard: "have", intended: "work",
+            in: &refusedLearned, checker: recordChecker)
+        let refusedOK = !refusedResult
+            && !refusedLearned.corrections.contains { $0.heard == "have" }
+            && refusedLearned.terms.contains("work")
+        if !refusedOK { passed = false }
+        print("\(refusedOK ? "PASS" : "FAIL"): record(\"have\" -> \"work\") = " +
+              "\(refusedResult), corrections = " +
+              "\(refusedLearned.corrections.map { "\($0.heard)->\($0.intended)" })" +
+              ", terms = \(refusedLearned.terms)")
+
+        // Two successive calls against the same inout store must accumulate:
+        // the second call sees the first's stored mapping and refuses its
+        // reverse, exactly as reload-per-candidate would have after the
+        // first call's save() landed on disk.
+        var accumulating = LearnedData()
+        let firstResult = LearnedStore.record(
+            heard: "alpha", intended: "beta",
+            in: &accumulating, checker: recordChecker)
+        let secondResult = LearnedStore.record(
+            heard: "beta", intended: "alpha",
+            in: &accumulating, checker: recordChecker)
+        let accumulatedOK = firstResult && !secondResult
+            && accumulating.corrections.count == 1
+            && accumulating.corrections.contains {
+                $0.heard == "alpha" && $0.intended == "beta"
+            }
+        if !accumulatedOK { passed = false }
+        print("\(accumulatedOK ? "PASS" : "FAIL"): record(\"alpha\"->\"beta\" then " +
+              "\"beta\"->\"alpha\") = \(firstResult), \(secondResult), corrections = " +
+              "\(accumulating.corrections.map { "\($0.heard)->\($0.intended)" })")
 
         return passed
     }
