@@ -779,6 +779,33 @@ enum LearnedStore {
               "\"beta\"->\"alpha\") = \(firstResult), \(secondResult), corrections = " +
               "\(accumulating.corrections.map { "\($0.heard)->\($0.intended)" })")
 
+        // MARK: Audio device enumeration
+        // CoreAudio results depend on what is plugged in, so assert contracts
+        // rather than specific hardware. A machine with no inputs must pass too.
+        let devices = AudioDevices.inputDevices()
+        let wellFormed = devices.allSatisfy { !$0.uid.isEmpty && !$0.name.isEmpty }
+        if !wellFormed { passed = false }
+        print("\(wellFormed ? "PASS" : "FAIL"): \(devices.count) input device(s), " +
+              "all with a uid and name")
+
+        let uniqueUIDs = Set(devices.map(\.uid)).count == devices.count
+        if !uniqueUIDs { passed = false }
+        print("\(uniqueUIDs ? "PASS" : "FAIL"): device UIDs are unique")
+
+        // The stored preference is a UID, so this round trip is the contract
+        // that makes the setting survive a reboot or a replug.
+        let roundTrips = devices.allSatisfy { AudioDevices.device(uid: $0.uid)?.uid == $0.uid }
+        if !roundTrips { passed = false }
+        print("\(roundTrips ? "PASS" : "FAIL"): every device resolves back by UID")
+
+        let unknownIsNil = AudioDevices.device(uid: "no-such-device-uid") == nil
+        if !unknownIsNil { passed = false }
+        print("\(unknownIsNil ? "PASS" : "FAIL"): unknown UID resolves to nil")
+
+        let stable = AudioDevices.inputDevices().map(\.uid) == devices.map(\.uid)
+        if !stable { passed = false }
+        print("\(stable ? "PASS" : "FAIL"): enumeration is stable across calls")
+
         return passed
     }
 }
