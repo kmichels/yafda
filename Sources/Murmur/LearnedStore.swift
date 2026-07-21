@@ -138,9 +138,10 @@ enum LearnedStore {
     /// input once makes the result independent of correction order.
     ///
     /// Corrections are indexed by first character so each word start tests only
-    /// the few rules that could begin there. Measured on a 500-word transcript
-    /// against a full 300-rule store: 0.23 ms, versus 4.05 ms for the regex
-    /// implementation this replaces and 19.16 ms for an unindexed single pass.
+    /// the few rules that could begin there: on a full 300-rule store, this
+    /// makes lookup roughly an order of magnitude faster than an unindexed
+    /// single pass, and comfortably faster than the regex implementation it
+    /// replaces.
     static func apply(in text: String, using corrections: [LearnedCorrection]) -> String {
         guard !corrections.isEmpty else { return text }
         // Longest first so overlapping mappings resolve predictably. The
@@ -151,6 +152,10 @@ enum LearnedStore {
             ($0.heard.count, $0.heard, $0.intended)
                 > ($1.heard.count, $1.heard, $1.intended)
         }
+        // Narrower than Foundation's case-insensitive match: ß, final sigma ς,
+        // and the ﬁ/ﬃ ligatures (compatibility decompositions/case-folding)
+        // can be missed - safe since canonical accents (é vs e + ´) hash
+        // identically as `Character`, and none of these forms start a dictated word.
         var byFirstCharacter: [Character: [LearnedCorrection]] = [:]
         for correction in ordered {
             guard let first = correction.heard.lowercased().first else { continue }
@@ -542,6 +547,12 @@ enum LearnedStore {
             ("empty corpus", LearnedStore.apply(in: "untouched", using: []), "untouched"),
             // Equal-length rules must not resolve by input order.
             ("ties deterministic",
+             LearnedStore.apply(in: "cat", using: [
+                LearnedCorrection(heard: "cat", intended: "dog"),
+                LearnedCorrection(heard: "cat", intended: "cow"),
+             ]),
+             "dog"),
+            ("ties order independent",
              LearnedStore.apply(in: "cat", using: [
                 LearnedCorrection(heard: "cat", intended: "dog"),
                 LearnedCorrection(heard: "cat", intended: "cow"),
