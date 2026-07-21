@@ -1,11 +1,18 @@
-Here is the review of the implementation plan, categorized by severity:
+This is an exceptionally thorough and well-structured implementation plan. The test-first approach, detailed self-review cycles, and explicit verification steps make it a model for others. The findings below are minor, reflecting the plan's high quality.
 
-*   **High: Unprotected single-letter words.** `isOrdinaryWord` returns `false` for tokens under 2 characters to allow learning acronyms (like "J Peg" -> "JPEG"). However, this classifies common valid words like "a" and "I" as non-ordinary, leaving them completely unprotected from global rewrites (e.g., accidentally mapping "a" -> "uh" would poison the store). 
-    *   *Fix:* Explicitly allowlist "a" and "i" (or check them against the spell checker) before the length guard.
-*   **High: `apply` performance bottleneck.** The single-pass `apply` loop performs up to 300 `range(of: .anchored)` checks at *every* word boundary in the transcript. This $O(N \times M)$ complexity on the main thread may cause UI hitching on long dictations. 
-    *   *Fix:* Add a fast-path check (e.g., verifying `text[index]` matches `correction.heard.first` case-insensitively) before executing the full string search.
-*   **Medium: FIFO eviction drops actively used rules.** In `add`, updating an existing rule modifies it in place rather than moving it to the end of the array. Because the 300-item limit is enforced via `removeFirst` (FIFO), actively used rules will eventually be evicted simply because they were created a long time ago. 
-    *   *Fix:* When updating a rule, remove it from its current index and append it to the end to achieve true LRU (Least Recently Used) eviction.
-*   **Medium: Swift 6 concurrency risk.** `static var wordChecker` is mutable global state. While Swift 5 language mode permits this, it risks data races if dictation processing calls `apply` or `add` off the main thread, and it will trigger strict concurrency violations when upgrading to Swift 6. 
-    *   *Fix:* Annotate the variable with `@MainActor` or `nonisolated(unsafe)`.
-*   **Low: Internal punctuation fails dictionary checks.** `trimmingCharacters(in: .alphanumerics.inverted)` only removes *surrounding* punctuation. Words with internal hyphens or apostrophes (e.g., "state-of-the-art") will fail `isKnownWord` and be treated as learnable non-ordinary speech. This is likely an acceptable edge case, but worth noting.
+### Review Findings
+
+*   **High: Potential for silent learning failure.**
+    *   The `extractCorrections` method retains a hardcoded limit of 4 words for both the "heard" and "intended" sides of a diff. A user correcting a 5-word phrase (e.g., "in the middle of the night" -> "in the middle of the day") will have their transcript saved, but no learning will occur, and the UI will not report why.
+
+*   **Medium: Concurrency assumption is a future risk.**
+    *   The plan correctly identifies the mutable `static var wordChecker` and marks it `nonisolated(unsafe)`, relying on the documented fact that all current call sites are on the main actor. This is a pragmatic choice but creates a latent bug: a future developer could call `LearnedStore.add` from a background thread, causing a data race.
+
+*   **Low: `WordChecker` is not locale-aware during a session.**
+    *   `SystemWordChecker` is initialized once with the `Settings.localeIdentifier` at startup. If the user changes their language in the app's settings, the checker will continue using the old language's dictionary until the app is restarted.
+
+*   **Low: Test data is coupled across tasks.**
+    *   The `FixedWordChecker` word list in Task 1's test is implicitly required by the guard tests in Task 2. A change to one test's data could cause the other to fail unexpectedly. Consolidating the test checker setup would improve maintainability.
+
+*   **Low: Performance of `apply` on adversarial input.**
+    *   The `apply` method's indexing by first character is a massive improvement. However, its performance degrades from O(words) to O(words * rules) if all learned corrections start with the same letter. This is a theoretical edge case, not a practical concern for typical usage.

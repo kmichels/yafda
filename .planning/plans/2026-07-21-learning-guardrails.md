@@ -845,9 +845,20 @@ four pre-existing self-tests remain green.
 | Medium: mutable `static var wordChecker` will break under Swift 6 | Adopted. Marked `nonisolated(unsafe)` with a comment recording that access is main-actor-only in practice. |
 | Low: words with internal punctuation ("state-of-the-art") fail `isKnownWord` | Accepted. They are classified non-ordinary and stay learnable, which is the safe direction: the guard's job is to block rules on *plainly ordinary* words. |
 
-**Follow-ups deliberately out of scope for this PR** (both pre-existing, both verified
-against upstream's current `apply`): contraction-boundary matching, and case
-preservation of the matched text.
+**Review findings addressed (Gemini, round 4 — 0 Blocker, 1 High, 1 Medium, 3 Low; review
+opened "the findings below are minor"):**
+
+| Finding | Resolution |
+|---|---|
+| High: corrections longer than 4 words are dropped silently, and the toast will not say why | **Declined: pre-existing and unchanged.** The `removed.count <= 4` limit is upstream's (`LearnedStore.swift:187`); this PR neither adds nor widens it, and "Transcript updated." remains truthful because nothing was learned. Noted as a follow-up, since it is a genuine gap in the inline-feedback promise. |
+| Medium: a future caller could invoke `add` off the main actor and race `wordChecker` | Accepted as documented. `nonisolated(unsafe)` plus the doc comment is the appropriate weight for a bug-fix PR; a real fix means annotating `LearnedStore` `@MainActor`, which upstream should decide. |
+| Low: `SystemWordChecker` caches the locale until relaunch | Accepted. Matches how the rest of `Settings` is read, and the app already requires a relaunch for several preferences. |
+| Low: `FixedWordChecker` word lists are duplicated across Task 1 and Task 2 tests | Accepted. Each task's list is deliberately self-contained so a task can be implemented and verified in isolation. |
+| Low: `apply` degrades to O(words x rules) if every rule shares a first letter | Accepted as theoretical. Requires all 300 rules to begin with the same character; worst case remains bounded by the pre-existing 300-rule cap. |
+
+**Follow-ups deliberately out of scope for this PR** (all pre-existing, all verified
+against upstream's current code): contraction-boundary matching, case preservation of
+the matched text, and silent rejection of corrections longer than four words.
 
 **Type consistency check:** `isUsefulMapping` takes `existing:`/`checker:` in Tasks 2
 and is called with both in Task 2's test. `add` returns `Bool` in Task 2 and is consumed
