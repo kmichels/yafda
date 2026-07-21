@@ -247,8 +247,8 @@ enum LearnedStore {
     ///   - checker: injectable so self-tests do not depend on the user's
     ///     spelling dictionary.
     private static func isUsefulMapping(heard: String, intended: String,
-                                        existing: [LearnedCorrection] = [],
-                                        checker: WordChecker? = nil) -> Bool {
+                                        existing: [LearnedCorrection],
+                                        checker: WordChecker?) -> Bool {
         let checker = checker ?? wordChecker
         guard isValidMapping(heard: heard, intended: intended) else { return false }
 
@@ -256,9 +256,11 @@ enum LearnedStore {
         // side is made entirely of ordinary words, it rewrites speech the user
         // never meant to change. The exception is a genuine re-segmentation of
         // the same sounds ("base ten" -> "Baseten"); a same-boundary
-        // punctuation edit ("its" -> "it's") is not, and would rewrite ordinary
-        // speech wherever it occurs.
-        if checker.isOrdinaryPhrase(heard), !isResegmentation(of: heard, to: intended) {
+        // punctuation edit ("its" -> "it's") is not, and neither is a split
+        // whose joined form is itself a real word ("set up" -> "setup") - both
+        // would rewrite ordinary speech wherever it occurs.
+        if checker.isOrdinaryPhrase(heard),
+           !isResegmentation(of: heard, to: intended, checker: checker) {
             return false
         }
 
@@ -306,14 +308,17 @@ enum LearnedStore {
         })
     }
 
-    /// A re-segmentation moves word boundaries without changing the sounds
-    /// ("base ten" -> "Baseten"). A same-boundary punctuation edit
-    /// ("its" -> "it's") is not, and would rewrite ordinary speech wherever
-    /// it occurs.
-    private static func isResegmentation(of heard: String, to intended: String) -> Bool {
+    /// A re-segmentation moves word boundaries without changing the sounds, and
+    /// lands on something that is not itself ordinary language ("base ten" ->
+    /// "Baseten"). A same-boundary punctuation edit ("its" -> "it's") is not
+    /// one, and neither is a split whose joined form is a real word ("set up"
+    /// -> "setup") - both would rewrite ordinary speech wherever it occurs.
+    private static func isResegmentation(of heard: String, to intended: String,
+                                         checker: WordChecker) -> Bool {
         normalizedForComparison(heard) == normalizedForComparison(intended)
             && heard.split(whereSeparator: { $0.isWhitespace }).count
                 != intended.split(whereSeparator: { $0.isWhitespace }).count
+            && !checker.isOrdinaryPhrase(intended)
     }
 
     /// Lowercased with every non-alphanumeric character removed, so that
@@ -373,6 +378,7 @@ enum LearnedStore {
         // MARK: Mapping guards
         let guardChecker = FixedWordChecker(words: [
             "have", "work", "he", "caught", "base", "ten", "so", "my", "a", "focus", "its",
+            "set", "up", "setup",
         ])
         let existing = [LearnedCorrection(heard: "focus", intended: "Phocus")]
         let guardCases: [(heard: String, intended: String, useful: Bool, why: String)] = [
@@ -385,6 +391,7 @@ enum LearnedStore {
             ("X2D2", "X2D II", true, "digits are not ordinary speech"),
             ("Phocus", "focus", false, "reverse of an existing mapping"),
             ("its", "it's", false, "punctuation edit on an ordinary word is not a re-segmentation"),
+            ("set up", "setup", false, "a split whose joined form is a real word is not a re-segmentation"),
         ]
         for testCase in guardCases {
             let got = LearnedStore.isUsefulMapping(
