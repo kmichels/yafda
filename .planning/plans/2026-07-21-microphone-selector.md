@@ -267,6 +267,12 @@ opening of the recording setup (currently `AudioRecorder.swift:32-34`):
 with:
 
 ```swift
+        // The meter in the settings view may be holding the device. Make it
+        // yield synchronously - a notification would let us start first.
+        MicMonitor.shared.suspendForRecording()
+        // The engine is reused across recordings, and changing an
+        // already-configured audio unit's device can fail silently.
+        engine.reset()
         let input = engine.inputNode
         // Select the device BEFORE reading the format: the format belongs to
         // the selected device, so choosing afterwards would record at the
@@ -481,11 +487,17 @@ final class MicMonitor: ObservableObject {
         if let deviceUID, let device = AudioDevices.device(uid: deviceUID) {
             try? input.auAudioUnit.setDeviceID(device.id)
         }
-        let format = input.outputFormat(forBus: 0)
-        // vDSP below reads one deinterleaved channel; bail rather than
-        // misread an interleaved buffer as mono.
-        guard format.sampleRate > 0, format.channelCount > 0, !format.isInterleaved
+        // Microphone access may not be granted yet; starting the engine
+        // without it fails and would leave the meter dead with no explanation.
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         else { return }
+
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { return }
+        // Interleaved buffers pack channels together, so read every Nth sample
+        // rather than refusing - some USB interfaces only offer interleaved,
+        // and bailing would show a dead meter on a working microphone.
+        let stride = vDSP_Stride(format.isInterleaved ? Int(format.channelCount) : 1)
 
         let store = latestRMS
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
@@ -494,7 +506,7 @@ final class MicMonitor: ObservableObject {
             let frames = vDSP_Length(buffer.frameLength)
             guard frames > 0 else { return }
             var rms: Float = 0
-            vDSP_rmsqv(channel, 1, &rms, frames)
+            vDSP_rmsqv(channel, stride, &rms, frames)
             store.withLock { $0 = rms }
         }
         do {
@@ -582,6 +594,10 @@ microphone card to the settings area, following the surrounding card style
     // @AppStorage, not @State: a @State copy seeded from Settings silently
     // diverges if the preference changes anywhere else.
     @AppStorage("inputDeviceUID") private var inputDeviceUID: String?
+    // Held in state and refreshed on hardware changes: reading
+    // AudioDevices.inputDevices() inline would leave the picker stale when a
+    // microphone is plugged in or removed while this view is open.
+    @State private var devices: [AudioInputDevice] = AudioDevices.inputDevices()
 
     private var microphoneCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -592,7 +608,7 @@ microphone card to the settings area, following the surrounding card style
 
             Picker("Input", selection: $inputDeviceUID) {
                 Text("System default").tag(String?.none)
-                ForEach(AudioDevices.inputDevices()) { device in
+                ForEach(devices) { device in
                     Text(device.name).tag(String?.some(device.uid))
                 }
             }
@@ -612,7 +628,7 @@ microphone card to the settings area, following the surrounding card style
                     .foregroundStyle(.secondary)
             }
 
-            if inputDeviceUID != nil, AudioDevices.device(uid: inputDeviceUID!) == nil {
+            if let chosen = inputDeviceUID, !devices.contains(where: { $0.uid == chosen }) {
                 Label("That microphone isn't connected. Using the system default.",
                       systemImage: "exclamationmark.triangle")
                     .font(.caption)
@@ -622,8 +638,15 @@ microphone card to the settings area, following the surrounding card style
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
-        .onAppear { micMonitor.viewAppeared(deviceUID: inputDeviceUID) }
+        .onAppear {
+            devices = AudioDevices.inputDevices()
+            micMonitor.viewAppeared(deviceUID: inputDeviceUID)
+        }
         .onDisappear { micMonitor.viewDisappeared() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: .AVAudioEngineConfigurationChange)) { _ in
+            devices = AudioDevices.inputDevices()
+        }
     }
 ```
 
@@ -732,6 +755,20 @@ deadlock or hold the device against the recorder.
 | Medium: `OSAllocatedUnfairLock` needs macOS 13+ | Non-issue, verified: `Package.swift:6` declares `.macOS(.v26)`. |
 | Low: virtual and aggregate devices (BlackHole, Teams) will appear in the picker | Accepted. They are legitimate input devices and filtering by name would be guesswork. |
 | Low: a Mac with no inputs may report default device id 0 | Already safe — `inputDevices().first { $0.id == deviceID }` returns nil, and the enumeration test is written to pass vacuously on such a machine. |
+
+**Review findings addressed (Gemini, round 3 — 0 Blocker, 3 High, 3 Medium, 3 Low):**
+
+| Finding | Resolution |
+|---|---|
+| **High: `engine.reset()` appeared only in prose, so an agent following the checkboxes would skip it** | Adopted, and a fair hit on plan hygiene — a fix that lives in commentary is not a fix. It and the `MicMonitor.shared.suspendForRecording()` handover are now in the Task 2 code block itself. |
+| **High: bailing on interleaved formats shows a dead meter on a working microphone** | Adopted. Reads every Nth sample via a `vDSP_Stride` instead of refusing. Some USB interfaces only offer interleaved, and "meter reads zero" is the worst possible signal on a feature whose whole job is proving the mic works. |
+| **High: starting the engine without microphone permission fails silently** | Adopted, with the correct platform API — the review suggested `AVAudioApplication.recordPermission`, which is iOS; macOS uses `AVCaptureDevice.authorizationStatus(for: .audio)`. |
+| Medium: the picker goes stale when a device is plugged in or removed while open | Adopted. The list is held in `@State` and refreshed on `.AVAudioEngineConfigurationChange`, which also re-evaluates the "not connected" warning. |
+| **Medium: "there is no `.v26`"** | **Declined — factually wrong.** `Package.swift:6` reads `platforms: [.macOS(.v26)]` and the package builds clean on swift-tools 6.2. macOS 26 is Tahoe; the reviewer was reasoning from the pre-26 numbering. |
+| Medium: teardown race between the config-change handler and the render thread | Already correct — `stop()` calls `removeTap` before `engine.stop()`, so the tap is gone before the engine tears down. |
+| Low: picker tag types vs `@AppStorage` binding | Noted for Task 4 verification. If the selection fails to stick when clicked, this is the first thing to check. |
+| Low: `assumingMemoryBound(to: AudioBufferList.self)` on a variable-length C struct | Accepted. Immediately wrapped in `UnsafeMutableAudioBufferListPointer`, which is the sanctioned way to walk it. |
+| Low: timer retain cycle | Non-issue; already `[weak self]`. |
 
 **Known gaps, deliberate:**
 - No device-change listener; a device appearing or disappearing mid-session is picked up on the next recording or when the settings view is reopened.
