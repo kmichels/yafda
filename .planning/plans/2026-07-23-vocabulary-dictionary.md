@@ -128,10 +128,10 @@ enum VocabularyStore {
            let entries = try? JSONDecoder().decode([VocabularyEntry].self, from: data) {
             return entries
         }
-        // No vocabulary.json yet: migrate the legacy dictionary if present.
-        let legacy = TextFormatter.loadDictionary()
-        guard !legacy.isEmpty else { return [] }
-        let migrated = migrate(from: legacy)
+        // No vocabulary.json yet: migrate the legacy dictionary if present,
+        // then always write the file so this migration branch runs exactly once
+        // (even when there is nothing to migrate).
+        let migrated = migrate(from: TextFormatter.loadDictionary())
         save(migrated)
         return migrated
     }
@@ -180,14 +180,21 @@ enum VocabularyStore {
     }
 
     /// Converts a legacy `spoken -> replacement` dictionary into corrections.
+    /// De-duplicates by lowercased misheard form so a legacy dictionary with
+    /// both "focus" and "Focus" produces a single entry.
     static func migrate(from legacy: [String: String]) -> [VocabularyEntry] {
-        legacy.compactMap { spoken, replacement in
+        var seen = Set<String>()
+        var entries: [VocabularyEntry] = []
+        for (spoken, replacement) in legacy.sorted(by: { $0.key.lowercased() < $1.key.lowercased() }) {
             let spokenTrimmed = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
             let replacementTrimmed = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !spokenTrimmed.isEmpty, !replacementTrimmed.isEmpty else { return nil }
-            return VocabularyEntry(word: replacementTrimmed, misheard: spokenTrimmed)
+            guard !spokenTrimmed.isEmpty, !replacementTrimmed.isEmpty else { continue }
+            let key = spokenTrimmed.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            entries.append(VocabularyEntry(word: replacementTrimmed, misheard: spokenTrimmed))
         }
-        .sorted { $0.word.lowercased() < $1.word.lowercased() }
+        return entries.sorted { $0.word.lowercased() < $1.word.lowercased() }
     }
 
     // MARK: - Convenience wrappers over the live store
@@ -317,24 +324,32 @@ Add to `LearnedStore.runSelfTest()` before `return passed`:
         // that gates its output carries the weight. It must accept a 1:1
         // substitution toward a vocab term and the no-change case, and reject
         // anything else.
-        let vocab = ["Phocus"]
-        let guardCases: [(name: String, original: String, candidate: String, accept: Bool)] = [
-            ("clean substitution toward a vocab term",
+        let guardCases: [(name: String, vocab: [String],
+                          original: String, candidate: String, accept: Bool)] = [
+            ("clean substitution toward a vocab term", ["Phocus"],
              "send it to focus today", "send it to Phocus today", true),
-            ("no change",
+            ("no change", ["Phocus"],
              "i need to focus", "i need to focus", true),
-            ("case-insensitive vocab match",
+            ("case-insensitive vocab match", ["Phocus"],
              "open focus now", "open phocus now", true),
-            ("rephrase changes word count",
+            // Regression: a sentence-final substitution keeps its punctuation.
+            ("substitution keeps trailing punctuation", ["Phocus"],
+             "does the word focus.", "does the word Phocus.", true),
+            // Multi-word term: pure capitalization of already-correct words is
+            // accepted (v1's supported multi-word case).
+            ("multi-word capitalization", ["Apple Vision Pro"],
+             "i want apple vision pro", "i want Apple Vision Pro", true),
+            ("rephrase changes word count", ["Phocus"],
              "send it to focus", "please send it to Phocus", false),
-            ("insertion",
+            ("insertion", ["Phocus"],
              "send it to focus", "send it to Phocus really", false),
-            ("substitution to a non-vocab word",
+            ("substitution to a non-vocab word", ["Phocus"],
              "send it to focus", "send it to Lightroom", false),
         ]
         for testCase in guardCases {
             let got = VocabularyDisambiguator.accept(
-                original: testCase.original, candidate: testCase.candidate, vocabulary: vocab)
+                original: testCase.original, candidate: testCase.candidate,
+                vocabulary: testCase.vocab)
             let ok = got == testCase.accept
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): guard/\(testCase.name) = \(got)")
@@ -387,6 +402,11 @@ import Foundation
 /// output that does more than substitute whole words toward vocabulary terms,
 /// so a hallucinated rephrase can never reach the user.
 struct VocabularyDisambiguator {
+    /// Upper bound on the on-device model call. A hung or throttled Apple
+    /// Intelligence daemon must never block dictation — past this, fall back to
+    /// the raw transcript.
+    private static let timeoutNanoseconds: UInt64 = 3_000_000_000  // 3s
+
     var isAvailable: Bool {
         SystemLanguageModel.default.availability == .available
     }
@@ -407,33 +427,56 @@ struct VocabularyDisambiguator {
         return the text exactly as given.
         Output ONLY the resulting text — no preamble, no quotes, no explanations.
         """
-        let session = LanguageModelSession(instructions: instructions)
-        guard let response = try? await session.respond(to: transcript) else {
-            return transcript
+
+        // Race the model against a timeout. Capture only Strings across the
+        // task boundary (the session is built inside the child) so nothing
+        // non-Sendable crosses it.
+        let input = transcript
+        let candidate: String? = await withTaskGroup(of: String?.self) { group in
+            group.addTask {
+                let session = LanguageModelSession(instructions: instructions)
+                guard let response = try? await session.respond(to: input) else { return nil }
+                return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
-        let candidate = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.accept(original: transcript, candidate: candidate, vocabulary: vocabulary)
+
+        guard let candidate,
+              Self.accept(original: transcript, candidate: candidate, vocabulary: vocabulary)
         else { return transcript }
         return candidate
     }
 
     /// Structural safety net. Accepts `candidate` only when every difference
     /// from `original` is a whole-word substitution whose replacement is a
-    /// vocabulary term (case-insensitive). Same word count required (v1 handles
-    /// 1:1 substitution only). The no-change case is accepted. A rephrase,
-    /// insertion, deletion, reorder, or substitution to a non-vocab word is
-    /// rejected — the caller then keeps the original transcript.
+    /// vocabulary term (comparing each word with surrounding punctuation
+    /// stripped, case-insensitively). Same word count required (v1 handles 1:1
+    /// substitution only, so multi-word vocab terms simply fall back). The
+    /// no-change case is accepted. A rephrase, insertion, deletion, reorder, or
+    /// substitution to a non-vocab word is rejected — the caller then keeps the
+    /// original transcript.
     static func accept(original: String, candidate: String, vocabulary: [String]) -> Bool {
         let originalWords = original.split(separator: " ", omittingEmptySubsequences: true)
             .map(String.init)
         let candidateWords = candidate.split(separator: " ", omittingEmptySubsequences: true)
             .map(String.init)
         guard originalWords.count == candidateWords.count else { return false }
+        // Compare on the word core: strip leading/trailing punctuation so a
+        // sentence-final "Phocus." still matches the vocab term "Phocus".
+        func core(_ word: String) -> String {
+            word.trimmingCharacters(in: .punctuationCharacters).lowercased()
+        }
         let vocab = Set(vocabulary.map { $0.lowercased() })
         for (originalWord, candidateWord) in zip(originalWords, candidateWords) {
-            if originalWord == candidateWord { continue }
-            // A changed word is allowed only if it IS a vocabulary term.
-            guard vocab.contains(candidateWord.lowercased()) else { return false }
+            if core(originalWord) == core(candidateWord) { continue }
+            // A changed word is allowed only if its core IS a vocabulary term.
+            guard vocab.contains(core(candidateWord)) else { return false }
         }
         return true
     }
@@ -443,7 +486,7 @@ struct VocabularyDisambiguator {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest`
-Expected: 81 PASS, 0 FAIL, exit 0 (74 + 7). The four `diff(...)` invariants still PASS.
+Expected: 83 PASS, 0 FAIL, exit 0 (74 + 9). The four `diff(...)` invariants still PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -490,19 +533,27 @@ Change the capture list to include the disambiguator, and disambiguate the raw t
             defer { try? FileManager.default.removeItem(at: url) }
             do {
                 let raw = try await recognize(fileAt: url)
+                // Load the vocabulary once and reuse it for both the context
+                // pass and the correction map, so vocabulary.json is read a
+                // single time per dictation rather than twice.
+                let vocabEntries = VocabularyStore.load()
                 // Context pass: fix homophones toward the user's vocabulary
                 // before cleanup. No-op when the vocabulary is empty.
                 let disambiguated = await vocabularyDisambiguator.disambiguate(
-                    raw, vocabulary: VocabularyStore.words())
-                var formatted = TextFormatter().format(disambiguated)
+                    raw, vocabulary: VocabularyStore.words(from: vocabEntries))
+                var formatted = TextFormatter(
+                    dictionary: VocabularyStore.correctionMap(from: vocabEntries)
+                ).format(disambiguated)
 ```
 
 Leave the rest of the pipeline (`LearnedStore.apply`, `SnippetStore.expand`, style rewrite, insertion) unchanged.
 
+Note: passing the correction map explicitly here means this call site does not rely on the `TextFormatter()` default from Task 2; the default still stands for every other caller.
+
 - [ ] **Step 3: Verify build and suite**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest; echo "exit=$?"`
-Expected: 81 PASS, 0 FAIL, `exit=0`. No test count change (this task is integration wiring).
+Expected: 83 PASS, 0 FAIL, `exit=0`. No test count change (this task is integration wiring).
 
 - [ ] **Step 4: Manual end-to-end check**
 
@@ -606,6 +657,14 @@ struct DictionaryPage: View {
     private func add() {
         let word = newWord.trimmingCharacters(in: .whitespaces)
         guard !word.isEmpty else { return }
+        // Don't accumulate duplicate words in the file; bias dedupes at runtime
+        // but the list would still show and persist repeats.
+        guard !entries.contains(where: { $0.word.lowercased() == word.lowercased() }) else {
+            newWord = ""
+            newMisheard = ""
+            correctingMisspelling = false
+            return
+        }
         let misheard = correctingMisspelling
             ? newMisheard.trimmingCharacters(in: .whitespaces)
             : ""
