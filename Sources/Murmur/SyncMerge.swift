@@ -1,6 +1,66 @@
 import Foundation
 
 enum SyncMerge {
+    /// Three-way merge of one keyed collection.
+    ///
+    /// `base` is what this machine saw at its last successful sync, so a key
+    /// present in `base` and absent in `local` was deleted here rather than
+    /// merely missing. That is what lets deletion propagate without tombstones.
+    ///
+    /// - Parameter resolve: called only when both sides changed the same key to
+    ///   different non-nil values.
+    static func merge<Value: Equatable>(
+        base: [String: Value], local: [String: Value], remote: [String: Value],
+        resolve: (Value, Value) -> Value) -> [String: Value] {
+        var result = local
+        for key in Set(base.keys).union(local.keys).union(remote.keys) {
+            let baseValue = base[key]
+            let localValue = local[key]
+            let remoteValue = remote[key]
+            switch (localValue != baseValue, remoteValue != baseValue) {
+            case (false, false):
+                break                                   // nobody touched it
+            case (true, false):
+                result[key] = localValue                // nil here means we deleted it
+            case (false, true):
+                result[key] = remoteValue               // nil here means they deleted it
+            case (true, true):
+                // An edit beats a delete: losing an edit is unrecoverable,
+                // whereas an unwanted entry can be deleted again.
+                switch (localValue, remoteValue) {
+                case let (localValue?, remoteValue?):
+                    result[key] = resolve(localValue, remoteValue)
+                case let (localValue?, nil):
+                    result[key] = localValue
+                case let (nil, remoteValue?):
+                    result[key] = remoteValue
+                case (nil, nil):
+                    result[key] = nil
+                }
+            }
+        }
+        return result
+    }
+
+    /// Unions vocabulary terms, case-insensitively, keeping first-seen casing.
+    ///
+    /// Terms are union-only on purpose: the UI has no way to delete one, so a
+    /// term missing on one machine means it was never learned there, not that
+    /// it was removed.
+    static func mergeTerms(base: [String], local: [String],
+                           remote: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for term in local + remote {
+            let key = term.lowercased()
+            guard !key.isEmpty, !seen.contains(key) else { continue }
+            seen.insert(key)
+            result.append(term)
+        }
+        if result.count > 300 { result.removeFirst(result.count - 300) }
+        return result
+    }
+
     // MARK: - Self test
 
     static func runSelfTest() -> Bool {
@@ -56,6 +116,50 @@ enum SyncMerge {
         let writeOK = wrote && roundTrip
         if !writeOK { passed = false }
         print("\(writeOK ? "PASS" : "FAIL"): writeShared/readShared round-trip .ready")
+
+        // MARK: Three-way merge
+        // Values are plain strings; `resolve` prefers local on a real conflict.
+        func merged(_ base: [String: String], _ local: [String: String],
+                    _ remote: [String: String]) -> [String: String] {
+            SyncMerge.merge(base: base, local: local, remote: remote) { l, _ in l }
+        }
+        let mergeCases: [(name: String, got: [String: String], expected: [String: String])] = [
+            ("unchanged",
+             merged(["a": "1"], ["a": "1"], ["a": "1"]), ["a": "1"]),
+            ("disjoint additions keep both",
+             merged([:], ["a": "1"], ["b": "2"]), ["a": "1", "b": "2"]),
+            // The regression this design exists to prevent.
+            ("local delete is not resurrected",
+             merged(["a": "1"], [:], ["a": "1"]), [:]),
+            ("remote delete propagates",
+             merged(["a": "1"], ["a": "1"], [:]), [:]),
+            ("re-added after delete survives",
+             merged(["a": "1"], ["a": "2"], [:]), ["a": "2"]),
+            ("remote edit wins when local untouched",
+             merged(["a": "1"], ["a": "1"], ["a": "9"]), ["a": "9"]),
+            ("local edit wins when remote untouched",
+             merged(["a": "1"], ["a": "9"], ["a": "1"]), ["a": "9"]),
+            ("both edited resolves to local",
+             merged(["a": "1"], ["a": "L"], ["a": "R"]), ["a": "L"]),
+            // Seeding the second machine: no base means union, never deletion.
+            ("missing base unions",
+             merged([:], ["a": "1"], ["b": "2"]), ["a": "1", "b": "2"]),
+            ("both deleted stays deleted",
+             merged(["a": "1"], [:], [:]), [:]),
+        ]
+        for testCase in mergeCases {
+            let ok = testCase.got == testCase.expected
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): merge/\(testCase.name) = \(testCase.got)" +
+                  (ok ? "" : " (expected \(testCase.expected))"))
+        }
+
+        // Terms have no delete UI, so a removal must never be inferred.
+        let termsGot = SyncMerge.mergeTerms(
+            base: ["Phocus"], local: ["Phocus", "Lightroom"], remote: ["phocus", "JPEG"])
+        let termsOK = termsGot == ["Phocus", "Lightroom", "JPEG"]
+        if !termsOK { passed = false }
+        print("\(termsOK ? "PASS" : "FAIL"): mergeTerms = \(termsGot)")
 
         return passed
     }
