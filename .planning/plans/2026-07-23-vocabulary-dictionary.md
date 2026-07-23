@@ -17,7 +17,7 @@
 - The disambiguation pass is **always optional polish**: any failure (empty vocabulary, Apple Intelligence unavailable, model throws, guard rejects) returns the raw transcript unchanged. A keypress must always produce text.
 - **Validate model output mechanically, never trust the prompt.** The `accept` guard is the enforcement point; the prompt is only a hint.
 - The guard is a **structural** safety net (no rephrasing/insertion/corruption), NOT a semantic judge. Whether "focus" in *this* sentence really means "Phocus" is the model's context call; the guard only ensures the model didn't do anything other than substitute toward a vocab term.
-- v1 disambiguation is **1:1 whole-word substitution only**. Word-count-changing collisions ("base ten" -> "Baseten") fall back to the raw transcript.
+- v1 disambiguation is **1:1 whole-word substitution only**. Word-count-changing collisions ("base ten" -> "Baseten") fall back to the raw transcript. Likewise, a word with internal punctuation the guard does not strip (a possessive like "Phocus's") only matches if that exact form is a vocabulary term; otherwise it falls back — safe, just unfixed. Acceptable for v1.
 - Persist to `vocabulary.json` in `AppPaths.supportDirectory`. Leave the legacy `dictionary.json` in place after migration (rollback safety).
 - Tests extend the existing `runSelfTest() -> Bool` convention wired to `--selftest`.
 - Build and test with: `swift build -c release && ./.build/release/Murmur --selftest`
@@ -31,7 +31,6 @@
 | `Sources/Murmur/VocabularyStore.swift` (create) | Entry model, JSON persistence, pure transforms (`words`/`corrections`/`correctionMap`/`migrate`), one-time migration from `dictionary.json`. |
 | `Sources/Murmur/VocabularyDisambiguator.swift` (create) | On-device context pass + the pure `accept` guard. |
 | `Sources/Murmur/LearnedStore.swift` (modify) | `biasTerms()` pulls vocabulary words; self-test cases. |
-| `Sources/Murmur/TextFormatter.swift` (modify) | Default dictionary source becomes `VocabularyStore.correctionMap()`. |
 | `Sources/Murmur/AppDelegate.swift` (modify) | Run the disambiguator in the transcribe pipeline before formatting. |
 | `Sources/Murmur/MainView.swift` (modify) | Rewrite `DictionaryPage` to the Wispr-style unified UI over `VocabularyStore`. |
 
@@ -122,18 +121,31 @@ enum VocabularyStore {
         AppPaths.supportDirectory.appendingPathComponent("vocabulary.json")
     }
 
+    /// Serialises the first-launch migration so a background transcribe task and
+    /// the Dictionary UI can't both migrate-and-write at the same instant.
+    private static let migrationLock = NSLock()
+
     /// Loads entries, migrating a legacy `dictionary.json` on first use.
     static func load() -> [VocabularyEntry] {
-        if let data = try? Data(contentsOf: fileURL),
-           let entries = try? JSONDecoder().decode([VocabularyEntry].self, from: data) {
-            return entries
-        }
-        // No vocabulary.json yet: migrate the legacy dictionary if present,
-        // then always write the file so this migration branch runs exactly once
-        // (even when there is nothing to migrate).
+        if let entries = readFile() { return entries }
+        // No vocabulary.json yet: migrate under a lock, double-checking inside
+        // it so a concurrent caller that just migrated wins and we don't write
+        // twice.
+        migrationLock.lock()
+        defer { migrationLock.unlock() }
+        if let entries = readFile() { return entries }
+        // Migrate the legacy dictionary if present, then always write the file
+        // so this branch runs exactly once (even with nothing to migrate).
         let migrated = migrate(from: TextFormatter.loadDictionary())
         save(migrated)
         return migrated
+    }
+
+    private static func readFile() -> [VocabularyEntry]? {
+        guard let data = try? Data(contentsOf: fileURL),
+              let entries = try? JSONDecoder().decode([VocabularyEntry].self, from: data)
+        else { return nil }
+        return entries
     }
 
     static func save(_ entries: [VocabularyEntry]) {
@@ -221,11 +233,11 @@ git commit -m "Add VocabularyStore with legacy dictionary migration"
 ### Task 2: Wire vocabulary into bias and hard corrections
 
 **Files:**
-- Modify: `Sources/Murmur/LearnedStore.swift` (`biasTerms()` + self-test), `Sources/Murmur/TextFormatter.swift`
+- Modify: `Sources/Murmur/LearnedStore.swift` (`biasTerms()` + self-test)
 
 **Interfaces:**
-- Consumes: `VocabularyStore.words()`, `VocabularyStore.correctionMap()`.
-- Produces: no new public symbols; `biasTerms()` now includes vocabulary words, and a default-constructed `TextFormatter` applies vocabulary corrections.
+- Consumes: `VocabularyStore.words()`, `VocabularyStore.correctionMap(from:)`.
+- Produces: no new public symbols; `biasTerms()` now includes vocabulary words. Hard corrections apply through `TextFormatter`'s **existing** `dictionary` parameter, which the Task 4 pipeline supplies from `VocabularyStore`. `TextFormatter`'s default initializer is deliberately left unchanged (a disk read in a default initializer is a footgun for any future non-pipeline caller).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -241,8 +253,10 @@ Add to `LearnedStore.runSelfTest()` before `return passed`:
         if !biasOK { passed = false }
         print("\(biasOK ? "PASS" : "FAIL"): biasTerms() includes a vocabulary word")
 
-        // A default TextFormatter applies the vocabulary correction as a replacement.
-        let formatted = TextFormatter().format("the base ten pipeline")
+        // TextFormatter, given the vocabulary correction map, applies the
+        // correction as a replacement (this is exactly how Task 4 wires it).
+        let vocabMap = VocabularyStore.correctionMap(from: VocabularyStore.load())
+        let formatted = TextFormatter(dictionary: vocabMap).format("the base ten pipeline")
         let formatOK = formatted.contains("Baseten") && !formatted.lowercased().contains("base ten")
         if !formatOK { passed = false }
         print("\(formatOK ? "PASS" : "FAIL"): TextFormatter applies a vocabulary correction = \(formatted)")
@@ -252,7 +266,7 @@ Add to `LearnedStore.runSelfTest()` before `return passed`:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest 2>&1 | grep -E "vocabulary word|vocabulary correction"`
-Expected: both new lines FAIL — `biasTerms()` does not yet include vocabulary words, and `TextFormatter` still reads `dictionary.json`.
+Expected: the `biasTerms()` line FAILs — it does not yet include vocabulary words. (The `TextFormatter` line may already pass, since it passes the map explicitly; the load-bearing new assertion is the bias one.)
 
 - [ ] **Step 3: Write the implementation**
 
@@ -276,19 +290,7 @@ Change the `TextFormatter.loadDictionary().values` line to pull from the vocabul
         SnippetStore.load().map(\.trigger).forEach(insert)
 ```
 
-In `TextFormatter.swift`, change the injected-dictionary default (currently `TextFormatter.swift:15`):
-
-```swift
-    init(dictionary: [String: String] = TextFormatter.loadDictionary()) {
-```
-
-to read the vocabulary store's corrections, so migrated and new corrections apply through the existing `applyDictionary` pass without a new pipeline step:
-
-```swift
-    init(dictionary: [String: String] = VocabularyStore.correctionMap()) {
-```
-
-Leave `TextFormatter.loadDictionary()` itself untouched — `VocabularyStore.load()` still uses it as the migration source.
+**Do NOT change `TextFormatter`'s initializer.** Its default stays `init(dictionary: [String: String] = TextFormatter.loadDictionary())`. Vocabulary corrections reach the real dictation path because Task 4 constructs `TextFormatter(dictionary: VocabularyStore.correctionMap(from: vocabEntries))` explicitly. Keeping the default off disk-backed vocabulary avoids a synchronous read in every future `TextFormatter()` call.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -298,8 +300,8 @@ Expected: 74 PASS, 0 FAIL, exit 0 (72 + 2). The four `diff(...)` invariants stil
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/Murmur/LearnedStore.swift Sources/Murmur/TextFormatter.swift
-git commit -m "Feed vocabulary words into bias and corrections into formatting"
+git add Sources/Murmur/LearnedStore.swift
+git commit -m "Feed vocabulary words into recognition bias"
 ```
 
 ---
@@ -558,7 +560,7 @@ Change the capture list to include the disambiguator, and disambiguate the raw t
 
 Leave the rest of the pipeline (`LearnedStore.apply`, `SnippetStore.expand`, style rewrite, insertion) unchanged.
 
-Note: passing the correction map explicitly here means this call site does not rely on the `TextFormatter()` default from Task 2; the default still stands for every other caller.
+Note: this call site passes the correction map explicitly. `TextFormatter`'s default initializer is intentionally left reading `dictionary.json` (unchanged), so no `TextFormatter()` call does a vocabulary disk read implicitly.
 
 Deliberately NOT cached in memory: `VocabularyStore.load()` runs once per completed dictation — human speech cadence, immediately after a multi-hundred-millisecond recognition and audio-file I/O — so one small JSON read is negligible. An in-memory cache would need invalidation coordinated between the Dictionary UI's save and this read; that coherence cost is not justified by a sub-millisecond saving. Revisit only if profiling shows it matters.
 
@@ -667,10 +669,10 @@ struct DictionaryPage: View {
     }
 
     private func add() {
-        let word = newWord.trimmingCharacters(in: .whitespaces)
+        let word = newWord.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !word.isEmpty else { return }
         let misheard = correctingMisspelling
-            ? newMisheard.trimmingCharacters(in: .whitespaces)
+            ? newMisheard.trimmingCharacters(in: .whitespacesAndNewlines)
             : ""
         let normalizedMisheard = misheard.isEmpty ? nil : misheard
         // Reject only an exact duplicate of the (word, misheard) pair, so a user
@@ -678,7 +680,7 @@ struct DictionaryPage: View {
         // same word, while a true repeat is not accumulated in the file.
         let isDuplicate = entries.contains {
             $0.word.lowercased() == word.lowercased()
-                && ($0.misheard?.lowercased() ?? "") == (normalizedMisheard?.lowercased() ?? "")
+                && $0.misheard?.lowercased() == normalizedMisheard?.lowercased()
         }
         guard !isDuplicate else {
             newWord = ""
@@ -739,7 +741,7 @@ git diff <mic-feature-head>..HEAD -- Sources/ > /tmp/murmur-vocab.diff
 
 - [ ] **Step 3: Adversarial review**
 
-Dispatch a reviewer over the same diff, focused on: whether `accept` can ever pass a corrupting rewrite (especially punctuation/tokenisation edge cases in the whitespace split), whether the disambiguation pass can block or slow dictation when the model hangs (it is `await`ed inline in the transcribe Task — confirm a slow model degrades latency but never drops text), whether migration can run twice or lose entries, and whether feeding vocabulary corrections through `TextFormatter` double-applies with any remaining `dictionary.json` read.
+Dispatch a reviewer over the same diff, focused on: whether `accept` can ever pass a corrupting rewrite (especially punctuation/tokenisation edge cases in the whitespace split); whether the disambiguation pass can block or slow dictation when the model hangs (it is `await`ed inline in the transcribe Task — confirm the 3s timeout bounds it and a slow model degrades latency but never drops text, and check that a timed-out `LanguageModelSession` does not leak memory in the daemon across repeated dictations); whether the double-checked migration lock is correct and migration can neither run twice nor lose entries; and whether feeding vocabulary corrections through `TextFormatter` in the pipeline double-applies with the unchanged default `dictionary.json` read anywhere.
 
 ---
 
