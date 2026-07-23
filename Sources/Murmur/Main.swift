@@ -42,7 +42,8 @@ struct MurmurMain {
         case .selftest:
             let formatterPassed = TextFormatter.runSelfTest()
             let learnedPassed = await LearnedStore.runSelfTest()
-            exit(formatterPassed && learnedPassed ? 0 : 1)
+            let syncPassed = SyncMerge.runSelfTest()
+            exit(formatterPassed && learnedPassed && syncPassed ? 0 : 1)
 
         case .format(let text):
             // Same pipeline as live dictation: format, apply learned
