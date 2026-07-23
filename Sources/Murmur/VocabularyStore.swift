@@ -89,8 +89,10 @@ enum VocabularyStore {
     }
 
     /// Converts a legacy `spoken -> replacement` dictionary into corrections.
-    /// De-duplicates by lowercased misheard form so a legacy dictionary with
-    /// both "focus" and "Focus" produces a single entry.
+    /// De-duplicates by the lowercased (misheard, word) pair so a legacy
+    /// dictionary with both "focus" and "Focus" -> the same replacement
+    /// produces a single entry, while two colliding keys that map to
+    /// genuinely different replacements are both preserved.
     static func migrate(from legacy: [String: String]) -> [VocabularyEntry] {
         var seen = Set<String>()
         var entries: [VocabularyEntry] = []
@@ -98,7 +100,7 @@ enum VocabularyStore {
             let spokenTrimmed = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
             let replacementTrimmed = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !spokenTrimmed.isEmpty, !replacementTrimmed.isEmpty else { continue }
-            let key = spokenTrimmed.lowercased()
+            let key = spokenTrimmed.lowercased() + "\u{0}" + replacementTrimmed.lowercased()
             guard !seen.contains(key) else { continue }
             seen.insert(key)
             entries.append(VocabularyEntry(word: replacementTrimmed, misheard: spokenTrimmed))

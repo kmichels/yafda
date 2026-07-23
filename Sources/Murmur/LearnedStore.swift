@@ -896,6 +896,16 @@ enum LearnedStore {
         print("\(formatOK ? "PASS" : "FAIL"): TextFormatter applies a vocabulary correction = \(formatted)")
         VocabularyStore.save(savedForBias)
 
+        // Migration must keep two colliding-key entries whose replacements differ,
+        // and still collapse a genuine duplicate pair.
+        let collisionMigrated = VocabularyStore.migrate(from: [
+            "base ten": "Baseten", "Base Ten": "Cornstarch", " base ten ": "Baseten",
+        ])
+        let collisionWords = Set(collisionMigrated.map(\.word))
+        let collisionOK = collisionWords == ["Baseten", "Cornstarch"]
+        if !collisionOK { passed = false }
+        print("\(collisionOK ? "PASS" : "FAIL"): migrate() keeps distinct-value key collisions = \(collisionWords.sorted())")
+
         return passed
     }
 }
