@@ -839,6 +839,45 @@ enum LearnedStore {
         if !settingOK { passed = false }
         print("\(settingOK ? "PASS" : "FAIL"): inputDeviceUID stores, clears and restores")
 
+        // MARK: Vocabulary store
+        // Pure transforms are tested directly; the file round trip uses the
+        // save/restore pattern so it never clobbers the real vocabulary.json.
+        let sampleEntries = [
+            VocabularyEntry(word: "Phocus", misheard: "focus"),
+            VocabularyEntry(word: "Hasselblad", misheard: nil),
+        ]
+        let vWords = VocabularyStore.words(from: sampleEntries)
+        let wordsOK = vWords == ["Phocus", "Hasselblad"]
+        if !wordsOK { passed = false }
+        print("\(wordsOK ? "PASS" : "FAIL"): vocabulary words() = \(vWords)")
+
+        let corr = VocabularyStore.corrections(from: sampleEntries)
+        let corrOK = corr.count == 1 && corr[0].misheard == "focus" && corr[0].word == "Phocus"
+        if !corrOK { passed = false }
+        print("\(corrOK ? "PASS" : "FAIL"): vocabulary corrections() keeps only misheard entries")
+
+        let map = VocabularyStore.correctionMap(from: sampleEntries)
+        let mapOK = map == ["focus": "Phocus"]
+        if !mapOK { passed = false }
+        print("\(mapOK ? "PASS" : "FAIL"): vocabulary correctionMap() = \(map)")
+
+        // Migration turns a legacy spoken->replacement pair into a correction.
+        let migrated = VocabularyStore.migrate(from: ["focus": "Phocus", "lightrim": "Lightroom"])
+        let migratedOK = migrated.count == 2
+            && migrated.allSatisfy { $0.misheard != nil }
+            && Set(migrated.map(\.word)) == ["Phocus", "Lightroom"]
+        if !migratedOK { passed = false }
+        print("\(migratedOK ? "PASS" : "FAIL"): migrate() converts legacy dictionary to corrections")
+
+        // File round trip via save/restore, so the user's real store is untouched.
+        let savedVocab = VocabularyStore.load()
+        VocabularyStore.save(sampleEntries)
+        let reloaded = VocabularyStore.load()
+        let roundTripOK = reloaded.map(\.word) == ["Phocus", "Hasselblad"]
+        VocabularyStore.save(savedVocab)
+        if !roundTripOK { passed = false }
+        print("\(roundTripOK ? "PASS" : "FAIL"): vocabulary.json round trips words")
+
         return passed
     }
 }
