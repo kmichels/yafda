@@ -297,7 +297,7 @@ enum LearnedStore {
         let learned = load()
         learned.terms.forEach(insert)
         learned.corrections.map(\.intended).forEach(insert)
-        TextFormatter.loadDictionary().values.forEach(insert)
+        VocabularyStore.words().forEach(insert)
         SnippetStore.load().map(\.trigger).forEach(insert)
         return Array(terms.prefix(300))
     }
@@ -877,6 +877,24 @@ enum LearnedStore {
         VocabularyStore.save(savedVocab)
         if !roundTripOK { passed = false }
         print("\(roundTripOK ? "PASS" : "FAIL"): vocabulary.json round trips words")
+
+        // MARK: Vocabulary feeds bias and formatting
+        // Save/restore the real store so the assertions are deterministic.
+        let savedForBias = VocabularyStore.load()
+        VocabularyStore.save([VocabularyEntry(word: "Baseten", misheard: "base ten")])
+        let bias = LearnedStore.biasTerms()
+        let biasOK = bias.contains("Baseten")
+        if !biasOK { passed = false }
+        print("\(biasOK ? "PASS" : "FAIL"): biasTerms() includes a vocabulary word")
+
+        // TextFormatter, given the vocabulary correction map, applies the
+        // correction as a replacement (this is exactly how Task 4 wires it).
+        let vocabMap = VocabularyStore.correctionMap(from: VocabularyStore.load())
+        let formatted = TextFormatter(dictionary: vocabMap).format("the base ten pipeline")
+        let formatOK = formatted.contains("Baseten") && !formatted.lowercased().contains("base ten")
+        if !formatOK { passed = false }
+        print("\(formatOK ? "PASS" : "FAIL"): TextFormatter applies a vocabulary correction = \(formatted)")
+        VocabularyStore.save(savedForBias)
 
         return passed
     }
