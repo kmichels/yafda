@@ -588,13 +588,6 @@ enum SyncedStore {
     ///   Mac's data.
     /// Writes a LOCAL file the way the rest of the app does - a plain atomic
     /// write, no coordination. Mixing coordinated and uncoordinated writes on
-    /// the same path can deadlock, and every other writer of these files
-    /// (`LearnedStore.save`, `SnippetStore.save`, `MainView`) is uncoordinated.
-    @discardableResult
-    private static func writeLocal<T: Encodable>(_ value: T, to url: URL) -> Bool {
-        guard let encoded = try? JSONEncoder().encode(value) else { return false }
-        return (try? encoded.write(to: url, options: .atomic)) != nil
-    }
 
     /// Writes a file inside the iCloud folder, coordinated with the daemon.
     @discardableResult
@@ -745,7 +738,9 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
             log.info("vocabulary.json not downloaded yet; skipping this cycle")
             return
         case .missing:
-            guard write(Array(localEntries.values), to: remoteURL) else { return }
+            // Seed sorted, matching what every subsequent merge writes.
+            let seed = localEntries.values.sorted { $0.word.lowercased() < $1.word.lowercased() }
+            guard write(seed, to: remoteURL) else { return }
             base.vocabulary = localEntries
             return
         case .ready(let data):
@@ -784,7 +779,9 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
             log.info("snippets.json not downloaded yet; skipping this cycle")
             return
         case .missing:
-            guard write(Array(localSnippets.values), to: remoteURL) else { return }
+            // Seed sorted, matching what every subsequent merge writes.
+            let seed = localSnippets.values.sorted { $0.trigger < $1.trigger }
+            guard write(seed, to: remoteURL) else { return }
             base.snippets = localSnippets
             return
         case .ready(let data):
@@ -997,7 +994,7 @@ Expected: exactly the four files of PR #1 — no `SyncMerge.swift`, no `SyncedSt
 | Finding | Resolution |
 |---|---|
 | **High: background sync races the UI — a correction taught while the coordinated iCloud read blocks would be overwritten by the pre-read snapshot** | Adopted. This was introduced by round 3's own fix (moving sync off the main thread), which is worth noting: each structural change here has created a new hazard. `syncLearned` now reads the remote first and snapshots local only after the blocking read returns, shrinking the window to the merge-and-write itself. |
-| **High: coordinated writes to a LOCAL file mixed with the app's uncoordinated writes can deadlock** | Adopted. `writeLocal` (plain atomic, matching `LearnedStore.save` and `SnippetStore.save`) now handles `dictionary.json`; `write` is reserved strictly for paths inside the iCloud folder. |
+| **High: coordinated writes to a LOCAL file mixed with the app's uncoordinated writes can deadlock** | Adopted, later simplified: after the 2026-07-23 vocabulary reconciliation every local write goes through the store's own plain-atomic `save()` (`LearnedStore.save`, `VocabularyStore.save`, `SnippetStore.save`), so the interim `writeLocal` helper became dead code and was removed. `write` remains reserved strictly for paths inside the iCloud folder. |
 | Medium: an unsandboxed app touching CloudDocs triggers a TCC prompt, and a denial fails silently forever | Noted for Task 5 verification — the first launch after this ships will prompt, and a denial surfaces as a permanent `.notDownloaded`. The `warning` log names the store, which is the diagnosis path. |
 | Medium: `mergeTerms` truncation favours remote terms over older local ones | Accepted. No timestamp exists to sort by, and the 300 cap plus `removeFirst` matches `LearnedStore.appendTerm`. |
 | Low: the iCloud folder is visible in Finder and renaming it silently starts a fresh sync | Accepted and worth telling the user once. Not hidden with a dot prefix, because a visible folder is also how you notice sync is working. |
