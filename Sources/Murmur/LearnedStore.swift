@@ -869,32 +869,74 @@ enum LearnedStore {
         if !migratedOK { passed = false }
         print("\(migratedOK ? "PASS" : "FAIL"): migrate() converts legacy dictionary to corrections")
 
-        // File round trip via save/restore, so the user's real store is untouched.
-        let savedVocab = VocabularyStore.load()
-        VocabularyStore.save(sampleEntries)
-        let reloaded = VocabularyStore.load()
-        let roundTripOK = reloaded.map(\.word) == ["Phocus", "Hasselblad"]
-        VocabularyStore.save(savedVocab)
-        if !roundTripOK { passed = false }
-        print("\(roundTripOK ? "PASS" : "FAIL"): vocabulary.json round trips words")
+        // File round trip, isolated to a temp dir so the user's real store is untouched.
+        do {
+            let vocabTempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("murmur-selftest-vocab", isDirectory: true)
+            try? FileManager.default.removeItem(at: vocabTempDir)
+            try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
+            VocabularyStore.directoryOverride = vocabTempDir
+            defer {
+                VocabularyStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: vocabTempDir)
+            }
+
+            VocabularyStore.save(sampleEntries)
+            let reloaded = VocabularyStore.load()
+            let roundTripOK = reloaded.map(\.word) == ["Phocus", "Hasselblad"]
+            if !roundTripOK { passed = false }
+            print("\(roundTripOK ? "PASS" : "FAIL"): vocabulary.json round trips words")
+        }
 
         // MARK: Vocabulary feeds bias and formatting
-        // Save/restore the real store so the assertions are deterministic.
-        let savedForBias = VocabularyStore.load()
-        VocabularyStore.save([VocabularyEntry(word: "Baseten", misheard: "base ten")])
-        let bias = LearnedStore.biasTerms()
-        let biasOK = bias.contains("Baseten")
-        if !biasOK { passed = false }
-        print("\(biasOK ? "PASS" : "FAIL"): biasTerms() includes a vocabulary word")
+        // Isolated to a temp dir so the assertions are deterministic and the
+        // real store is untouched.
+        do {
+            let vocabTempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("murmur-selftest-vocab", isDirectory: true)
+            try? FileManager.default.removeItem(at: vocabTempDir)
+            try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
+            VocabularyStore.directoryOverride = vocabTempDir
+            defer {
+                VocabularyStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: vocabTempDir)
+            }
 
-        // TextFormatter, given the vocabulary correction map, applies the
-        // correction as a replacement (this is exactly how Task 4 wires it).
-        let vocabMap = VocabularyStore.correctionMap(from: VocabularyStore.load())
-        let formatted = TextFormatter(dictionary: vocabMap).format("the base ten pipeline")
-        let formatOK = formatted.contains("Baseten") && !formatted.lowercased().contains("base ten")
-        if !formatOK { passed = false }
-        print("\(formatOK ? "PASS" : "FAIL"): TextFormatter applies a vocabulary correction = \(formatted)")
-        VocabularyStore.save(savedForBias)
+            VocabularyStore.save([VocabularyEntry(word: "Baseten", misheard: "base ten")])
+            let bias = LearnedStore.biasTerms()
+            let biasOK = bias.contains("Baseten")
+            if !biasOK { passed = false }
+            print("\(biasOK ? "PASS" : "FAIL"): biasTerms() includes a vocabulary word")
+
+            // TextFormatter, given the vocabulary correction map, applies the
+            // correction as a replacement (this is exactly how Task 4 wires it).
+            let vocabMap = VocabularyStore.correctionMap(from: VocabularyStore.load())
+            let formatted = TextFormatter(dictionary: vocabMap).format("the base ten pipeline")
+            let formatOK = formatted.contains("Baseten") && !formatted.lowercased().contains("base ten")
+            if !formatOK { passed = false }
+            print("\(formatOK ? "PASS" : "FAIL"): TextFormatter applies a vocabulary correction = \(formatted)")
+        }
+
+        // MARK: Corrupt vocabulary.json is preserved, not re-migrated
+        do {
+            let vocabTempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("murmur-selftest-vocab-corrupt", isDirectory: true)
+            try? FileManager.default.removeItem(at: vocabTempDir)
+            try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
+            VocabularyStore.directoryOverride = vocabTempDir
+            defer {
+                VocabularyStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: vocabTempDir)
+            }
+            let corruptURL = vocabTempDir.appendingPathComponent("vocabulary.json")
+            try? "{ this is not valid json ][".write(to: corruptURL, atomically: true, encoding: .utf8)
+            let loaded = VocabularyStore.load()
+            let backupExists = FileManager.default.fileExists(
+                atPath: corruptURL.appendingPathExtension("corrupt").path)
+            let corruptOK = loaded.isEmpty && backupExists
+            if !corruptOK { passed = false }
+            print("\(corruptOK ? "PASS" : "FAIL"): corrupt vocabulary.json is preserved, not re-migrated")
+        }
 
         // Migration must keep two colliding-key entries whose replacements differ,
         // and still collapse a genuine duplicate pair.

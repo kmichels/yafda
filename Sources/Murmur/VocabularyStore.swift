@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One dictionary entry. A bare vocabulary word biases recognition toward its
 /// spelling. When `misheard` is set, the entry is also a hard correction:
@@ -14,35 +15,74 @@ struct VocabularyEntry: Codable, Identifiable, Equatable {
 /// which also carry a misheard-form correction. Replaces the old
 /// replacement-only `dictionary.json`, which it migrates in once.
 enum VocabularyStore {
+    /// Tests point this at a temp directory so the self-tests never touch the
+    /// user's real vocabulary.json. nil in normal operation.
+    static var directoryOverride: URL?
+
+    private static let log = Logger(subsystem: "com.murmur", category: "VocabularyStore")
+
     static var fileURL: URL {
-        AppPaths.supportDirectory.appendingPathComponent("vocabulary.json")
+        (directoryOverride ?? AppPaths.supportDirectory)
+            .appendingPathComponent("vocabulary.json")
     }
 
     /// Serialises the first-launch migration so a background transcribe task and
     /// the Dictionary UI can't both migrate-and-write at the same instant.
     private static let migrationLock = NSLock()
 
-    /// Loads entries, migrating a legacy `dictionary.json` on first use.
-    static func load() -> [VocabularyEntry] {
-        if let entries = readFile() { return entries }
-        // No vocabulary.json yet: migrate under a lock, double-checking inside
-        // it so a concurrent caller that just migrated wins and we don't write
-        // twice.
-        migrationLock.lock()
-        defer { migrationLock.unlock() }
-        if let entries = readFile() { return entries }
-        // Migrate the legacy dictionary if present, then always write the file
-        // so this branch runs exactly once (even with nothing to migrate).
-        let migrated = migrate(from: TextFormatter.loadDictionary())
-        save(migrated)
-        return migrated
+    private enum FileState {
+        case decoded([VocabularyEntry])
+        case corrupt
+        case missing
     }
 
-    private static func readFile() -> [VocabularyEntry]? {
-        guard let data = try? Data(contentsOf: fileURL),
-              let entries = try? JSONDecoder().decode([VocabularyEntry].self, from: data)
-        else { return nil }
-        return entries
+    private static func readState() -> FileState {
+        let url = fileURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+        guard let data = try? Data(contentsOf: url) else { return .corrupt }
+        guard let entries = try? JSONDecoder().decode([VocabularyEntry].self, from: data) else {
+            return .corrupt
+        }
+        return .decoded(entries)
+    }
+
+    /// A corrupt/undecodable vocabulary.json is preserved as `vocabulary.json.corrupt`
+    /// (for manual recovery) rather than silently overwritten by re-migration.
+    private static func preserveCorruptFile() {
+        let url = fileURL
+        let backup = url.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: backup)
+        try? FileManager.default.moveItem(at: url, to: backup)
+        log.error("vocabulary.json was unreadable; moved to vocabulary.json.corrupt and started empty")
+    }
+
+    /// Loads entries, migrating a legacy `dictionary.json` on first use. A
+    /// corrupt file is preserved and never overwritten by re-migration.
+    static func load() -> [VocabularyEntry] {
+        switch readState() {
+        case .decoded(let entries):
+            return entries
+        case .corrupt:
+            preserveCorruptFile()
+            return []
+        case .missing:
+            // No vocabulary.json yet: migrate under a lock, double-checking
+            // inside it so a concurrent caller that just migrated wins and we
+            // don't write twice.
+            migrationLock.lock()
+            defer { migrationLock.unlock() }
+            switch readState() {
+            case .decoded(let entries): return entries
+            case .corrupt: preserveCorruptFile(); return []
+            case .missing:
+                // Migrate the legacy dictionary if present, then always write
+                // the file so this branch runs exactly once (even with
+                // nothing to migrate).
+                let migrated = migrate(from: TextFormatter.loadDictionary())
+                save(migrated)
+                return migrated
+            }
+        }
     }
 
     static func save(_ entries: [VocabularyEntry]) {
