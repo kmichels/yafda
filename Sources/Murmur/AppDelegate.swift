@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var transcriber = Transcriber(locale: Settings.locale)
     private lazy var hotkeyMonitor = HotkeyMonitor(hotkey: Settings.hotkey)
     let rewriteEngine = RewriteEngine()
+    private let vocabularyDisambiguator = VocabularyDisambiguator()
     let whisperEngine = WhisperEngine()
     @Published var engine: String = Settings.engine
     @Published var whisperModel: String = Settings.whisperModel
@@ -305,11 +306,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let targetBundleID = recordingTargetBundleID
         recordingTargetBundleID = nil
 
-        Task { [history, rewriteEngine] in
+        Task { [history, rewriteEngine, vocabularyDisambiguator] in
             defer { try? FileManager.default.removeItem(at: url) }
             do {
                 let raw = try await recognize(fileAt: url)
-                var formatted = TextFormatter().format(raw)
+                // Load the vocabulary once and reuse it for both the context
+                // pass and the correction map, so vocabulary.json is read a
+                // single time per dictation rather than twice.
+                let vocabEntries = VocabularyStore.load()
+                // Context pass: fix homophones toward the user's vocabulary
+                // before cleanup. No-op when the vocabulary is empty.
+                let disambiguated = await vocabularyDisambiguator.disambiguate(
+                    raw, vocabulary: VocabularyStore.words(from: vocabEntries))
+                var formatted = TextFormatter(
+                    dictionary: VocabularyStore.correctionMap(from: vocabEntries)
+                ).format(disambiguated)
                 formatted = LearnedStore.apply(in: formatted)
                 formatted = SnippetStore.expand(in: formatted)
 
