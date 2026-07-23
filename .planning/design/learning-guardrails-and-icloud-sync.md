@@ -170,6 +170,11 @@ For each store, entities are keyed (see below) and the merge is:
 3. Apply both change sets to `base`.
 4. If both sides changed the same key, prefer local - it is the machine the user is
    sitting at. Never-concurrent use makes this rare by construction.
+   **Delete-vs-edit sub-case (made explicit 2026-07-23): the edit wins, in either
+   direction.** A key deleted on one side but edited on the other survives with the
+   edited value - losing an edit is unrecoverable, while an unwanted resurrected entry
+   can simply be deleted again. "Prefer local" applies only when both sides hold
+   values; a deletion never silently destroys the other machine's edit.
 5. Write the merged result to local and remote, then write it as the new base.
 
 Deletion needs no tombstone: a key present in `base` and absent in `local` was deleted
