@@ -15,7 +15,7 @@
 - **Local branch only.** This ships on `local/main` and must never reach `fix/learning-guardrails` or upstream PR #1.
 - **No change to any on-disk format upstream owns.** `learned.json` and `snippets.json` keep their exact current shapes. `vocabulary.json` is the fork's own format (`[VocabularyEntry]`) and also keeps its shape. The only new file is `sync-base.json`, which is ours.
 - Sync covers `learned.json`, `vocabulary.json`, `snippets.json`. **Not** the legacy `dictionary.json` (a frozen one-time migration source superseded by `vocabulary.json` on 2026-07-23), **not** `history.json`, **not** `scratchpad.txt`, **not** `whisper-models/`.
-- Local vocabulary is read via `VocabularyStore.load()` (never a raw file decode) so its one-time migration lock and corrupt-file preservation (`vocabulary.json.corrupt`) keep working. The vocabulary merge keys on the (word, misheard) content pair — `word.lowercased() + "\u{0}" + (misheard ?? "").lowercased()` — NOT the entry `UUID`, because both machines mint different UUIDs for the same logical entry.
+- Local vocabulary is read via `VocabularyStore.load()` (never a raw file decode) so its one-time migration lock and corrupt-file preservation (`vocabulary.json.corrupt`) keep working. Concurrent `load()` from the background sync and the main thread is already safe by construction: the first-run migration is double-checked under an `NSLock`, and all store writes are atomic replaces, so a torn read is impossible. The vocabulary merge keys on the (word, misheard) content pair — `word.lowercased() + "\u{0}" + (misheard ?? "").lowercased()` — NOT the entry `UUID`, because both machines mint different UUIDs for the same logical entry.
 - `LearnedStore.runSelfTest()` is now `async` (awaited in `Main.swift`); the new `SyncMerge.runSelfTest()` stays synchronous and is called alongside it.
 - No new third-party dependencies.
 - Tests extend the repo's existing `runSelfTest() -> Bool` convention wired to `--selftest`.
@@ -727,24 +727,32 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
 ```swift
     private static func syncVocabulary(in remoteDirectory: URL, base: inout SyncBase) {
         let remoteURL = remoteDirectory.appendingPathComponent("vocabulary.json")
-        // Read through VocabularyStore.load(), never a raw decode: it owns the
-        // one-time legacy migration (locked) and corrupt-file preservation.
-        let localEntries = Dictionary(
-            VocabularyStore.load().map { (key(for: $0), $0) },
-            uniquingKeysWith: { first, _ in first })
-        let remoteData: Data
+        // Read the REMOTE first: the coordinated iCloud read can block, and a
+        // local snapshot taken before it would overwrite anything the user
+        // adds meanwhile (same race Task 3 fixed in syncLearned). Snapshot
+        // local only after the blocking read returns.
+        let remoteData: Data?
         switch AppPaths.readShared(remoteURL) {
         case .notDownloaded:
             log.info("vocabulary.json not downloaded yet; skipping this cycle")
             return
         case .missing:
+            remoteData = nil
+        case .ready(let data):
+            remoteData = data
+        }
+        // Local snapshot AFTER the blocking remote read. Through
+        // VocabularyStore.load(), never a raw decode: it owns the one-time
+        // legacy migration (locked) and corrupt-file preservation.
+        let localEntries = Dictionary(
+            VocabularyStore.load().map { (key(for: $0), $0) },
+            uniquingKeysWith: { first, _ in first })
+        guard let remoteData else {
             // Seed sorted, matching what every subsequent merge writes.
             let seed = localEntries.values.sorted { $0.word.lowercased() < $1.word.lowercased() }
             guard write(seed, to: remoteURL) else { return }
             base.vocabulary = localEntries
             return
-        case .ready(let data):
-            remoteData = data
         }
         guard let remoteList = try? JSONDecoder()
             .decode([VocabularyEntry].self, from: remoteData) else {
@@ -770,22 +778,28 @@ Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
 
     private static func syncSnippets(in remoteDirectory: URL, base: inout SyncBase) {
         let remoteURL = remoteDirectory.appendingPathComponent("snippets.json")
-        let localSnippets = Dictionary(
-            SnippetStore.load().map { (key(for: $0), $0) },
-            uniquingKeysWith: { first, _ in first })
-        let remoteData: Data
+        // Remote first, local snapshot after — same race fix as syncLearned
+        // and syncVocabulary: the coordinated read can block, and a pre-read
+        // local snapshot would overwrite a snippet added meanwhile.
+        let remoteData: Data?
         switch AppPaths.readShared(remoteURL) {
         case .notDownloaded:
             log.info("snippets.json not downloaded yet; skipping this cycle")
             return
         case .missing:
+            remoteData = nil
+        case .ready(let data):
+            remoteData = data
+        }
+        let localSnippets = Dictionary(
+            SnippetStore.load().map { (key(for: $0), $0) },
+            uniquingKeysWith: { first, _ in first })
+        guard let remoteData else {
             // Seed sorted, matching what every subsequent merge writes.
             let seed = localSnippets.values.sorted { $0.trigger < $1.trigger }
             guard write(seed, to: remoteURL) else { return }
             base.snippets = localSnippets
             return
-        case .ready(let data):
-            remoteData = data
         }
         guard let remoteList = try? JSONDecoder()
             .decode([Snippet].self, from: remoteData) else {
