@@ -61,6 +61,7 @@ enum AudioDevices {
         else { return [] }
         var ids = [AudioObjectID](
             repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        size = UInt32(ids.count * MemoryLayout<AudioObjectID>.size)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
                                          &address, 0, nil, &size, &ids) == noErr
         else { return [] }

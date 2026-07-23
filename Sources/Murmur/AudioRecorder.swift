@@ -41,6 +41,12 @@ final class AudioRecorder {
         // The meter in the settings view may be holding the device. Make it
         // yield synchronously - a notification would let us start first.
         MainActor.assumeIsolated { MicMonitor.shared.suspendForRecording() }
+        var started = false
+        defer {
+            if !started {
+                MainActor.assumeIsolated { MicMonitor.shared.resumeAfterRecording() }
+            }
+        }
         // The engine is reused across recordings, and changing an
         // already-configured audio unit's device can fail silently.
         engine.reset()
@@ -69,6 +75,7 @@ final class AudioRecorder {
         engine.prepare()
         try engine.start()
         isRecording = true
+        started = true
     }
 
     /// Stops recording and returns the captured audio file URL,
@@ -99,8 +106,11 @@ final class AudioRecorder {
     /// - Returns: a description of what was actually selected.
     private static func selectInputDevice(on input: AVAudioInputNode) -> String {
         guard let uid = Settings.inputDeviceUID else {
-            return AudioDevices.systemDefaultInput().map { "\($0.name) (system default)" }
-                ?? "System default"
+            guard let defaultDevice = AudioDevices.systemDefaultInput() else {
+                return "System default"
+            }
+            try? input.auAudioUnit.setDeviceID(defaultDevice.id)
+            return "\(defaultDevice.name) (system default)"
         }
         guard let device = AudioDevices.device(uid: uid) else {
             return "Chosen microphone unavailable — using system default"

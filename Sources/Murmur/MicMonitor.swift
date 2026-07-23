@@ -100,6 +100,8 @@ final class MicMonitor: ObservableObject {
         let input = engine.inputNode
         if let deviceUID, let device = AudioDevices.device(uid: deviceUID) {
             try? input.auAudioUnit.setDeviceID(device.id)
+        } else if let defaultDevice = AudioDevices.systemDefaultInput() {
+            try? input.auAudioUnit.setDeviceID(defaultDevice.id)
         }
         // Microphone access may not be granted yet; starting the engine
         // without it fails and would leave the meter dead with no explanation.
