@@ -41,7 +41,7 @@ struct MurmurMain {
         switch mode {
         case .selftest:
             let formatterPassed = TextFormatter.runSelfTest()
-            let learnedPassed = LearnedStore.runSelfTest()
+            let learnedPassed = await LearnedStore.runSelfTest()
             exit(formatterPassed && learnedPassed ? 0 : 1)
 
         case .format(let text):

@@ -480,7 +480,7 @@ enum LearnedStore {
 
     // MARK: - Self test
 
-    static func runSelfTest() -> Bool {
+    static func runSelfTest() async -> Bool {
         let cases: [(original: String, corrected: String,
                      expected: [(String, String)])] = [
             ("Send it to Soren today.", "Send it to Søren today.",
@@ -905,6 +905,53 @@ enum LearnedStore {
         let collisionOK = collisionWords == ["Baseten", "Cornstarch"]
         if !collisionOK { passed = false }
         print("\(collisionOK ? "PASS" : "FAIL"): migrate() keeps distinct-value key collisions = \(collisionWords.sorted())")
+
+        // MARK: Vocabulary disambiguation guard
+        // The on-device model is not headless-testable, so the structural guard
+        // that gates its output carries the weight. It must accept a 1:1
+        // substitution toward a vocab term and the no-change case, and reject
+        // anything else.
+        let disambigGuardCases: [(name: String, vocab: [String],
+                          original: String, candidate: String, accept: Bool)] = [
+            ("clean substitution toward a vocab term", ["Phocus"],
+             "send it to focus today", "send it to Phocus today", true),
+            ("no change", ["Phocus"],
+             "i need to focus", "i need to focus", true),
+            ("case-insensitive vocab match", ["Phocus"],
+             "open focus now", "open phocus now", true),
+            // Regression: a sentence-final substitution keeps its punctuation.
+            ("substitution keeps trailing punctuation", ["Phocus"],
+             "does the word focus.", "does the word Phocus.", true),
+            // Multi-word term: v1 does not substitute toward it (the term is a
+            // single Set element, never a single token), so it falls back.
+            ("multi-word term falls back (v1 unsupported)", ["Apple Vision Pro"],
+             "i want apple vision pro", "i want Apple Vision Pro", false),
+            // Loophole closed: the model may not recase an arbitrary non-vocab
+            // word and have it pass as "no change".
+            ("recasing a non-vocab word is rejected", ["Phocus"],
+             "i love my macbook", "i love my MacBook", false),
+            ("rephrase changes word count", ["Phocus"],
+             "send it to focus", "please send it to Phocus", false),
+            ("insertion", ["Phocus"],
+             "send it to focus", "send it to Phocus really", false),
+            ("substitution to a non-vocab word", ["Phocus"],
+             "send it to focus", "send it to Lightroom", false),
+        ]
+        for testCase in disambigGuardCases {
+            let got = VocabularyDisambiguator.accept(
+                original: testCase.original, candidate: testCase.candidate,
+                vocabulary: testCase.vocab)
+            let ok = got == testCase.accept
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): guard/\(testCase.name) = \(got)")
+        }
+
+        // Empty vocabulary short-circuits without a model call, returning input.
+        let disambiguator = VocabularyDisambiguator()
+        let passthrough = await disambiguator.disambiguate("send it to focus", vocabulary: [])
+        let passthroughOK = passthrough == "send it to focus"
+        if !passthroughOK { passed = false }
+        print("\(passthroughOK ? "PASS" : "FAIL"): empty vocabulary returns the transcript unchanged")
 
         return passed
     }
