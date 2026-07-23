@@ -15,6 +15,9 @@ final class AudioRecorder {
     private(set) var currentFileURL: URL?
     private(set) var isRecording = false
 
+    /// Human-readable name of the device the last recording used, for the UI.
+    private(set) var activeDeviceDescription = "System default"
+
     static func requestMicrophoneAccess() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -29,7 +32,17 @@ final class AudioRecorder {
     func start() throws {
         guard !isRecording else { return }
 
+        // The meter in the settings view may be holding the device. Make it
+        // yield synchronously - a notification would let us start first.
+        MainActor.assumeIsolated { MicMonitor.shared.suspendForRecording() }
+        // The engine is reused across recordings, and changing an
+        // already-configured audio unit's device can fail silently.
+        engine.reset()
         let input = engine.inputNode
+        // Select the device BEFORE reading the format: the format belongs to
+        // the selected device, so choosing afterwards would record at the
+        // previous device's sample rate.
+        activeDeviceDescription = Self.selectInputDevice(on: input)
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(
@@ -59,6 +72,7 @@ final class AudioRecorder {
         guard isRecording else { return nil }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        MainActor.assumeIsolated { MicMonitor.shared.resumeAfterRecording() }
         isRecording = false
         file = nil
         let url = currentFileURL
@@ -70,6 +84,31 @@ final class AudioRecorder {
     func cancel() {
         if let url = stop() {
             try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// Points `input` at the user's chosen microphone when one is set and
+    /// present. Falls back to the system default in every failure case -
+    /// device selection must never stop a recording from happening.
+    /// - Returns: a description of what was actually selected.
+    private static func selectInputDevice(on input: AVAudioInputNode) -> String {
+        guard let uid = Settings.inputDeviceUID else {
+            return AudioDevices.systemDefaultInput().map { "\($0.name) (system default)" }
+                ?? "System default"
+        }
+        guard let device = AudioDevices.device(uid: uid) else {
+            return "Chosen microphone unavailable — using system default"
+        }
+        do {
+            try input.auAudioUnit.setDeviceID(device.id)
+            return device.name
+        } catch {
+            // Leaving the unit on a device that failed to select would record
+            // from nothing. Put it back on the system default explicitly.
+            if let fallback = AudioDevices.systemDefaultInput() {
+                try? input.auAudioUnit.setDeviceID(fallback.id)
+            }
+            return "\(device.name) unavailable — using system default"
         }
     }
 }

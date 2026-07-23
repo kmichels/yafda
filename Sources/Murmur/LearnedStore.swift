@@ -826,6 +826,19 @@ enum LearnedStore {
         if !speechOK { passed = false }
         print("\(speechOK ? "PASS" : "FAIL"): level/speech is mid-scale = \(speech)")
 
+        // MARK: Input device preference
+        // Round-trip the setting without disturbing whatever is really stored.
+        let savedUID = Settings.inputDeviceUID
+        Settings.inputDeviceUID = nil
+        let defaultsToSystem = Settings.inputDeviceUID == nil
+        Settings.inputDeviceUID = "test-uid-12345"
+        let storesUID = Settings.inputDeviceUID == "test-uid-12345"
+        Settings.inputDeviceUID = savedUID
+        let restored = Settings.inputDeviceUID == savedUID
+        let settingOK = defaultsToSystem && storesUID && restored
+        if !settingOK { passed = false }
+        print("\(settingOK ? "PASS" : "FAIL"): inputDeviceUID stores, clears and restores")
+
         return passed
     }
 }

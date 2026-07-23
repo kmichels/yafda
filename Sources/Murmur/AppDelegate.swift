@@ -477,4 +477,12 @@ enum Settings {
     static var locale: Locale {
         Locale(identifier: localeIdentifier)
     }
+
+    /// UID of the microphone to record from, or nil to follow the system
+    /// default. A UID rather than an AudioObjectID because IDs are ephemeral
+    /// handles that change between launches.
+    static var inputDeviceUID: String? {
+        get { defaults.string(forKey: "inputDeviceUID") }
+        set { defaults.set(newValue, forKey: "inputDeviceUID") }
+    }
 }
