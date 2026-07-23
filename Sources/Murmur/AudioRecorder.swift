@@ -9,6 +9,10 @@ import Foundation
 ///   audio system-wide and can feed the recognizer silence.
 /// - A warm always-on engine with a pre-roll ring buffer: wedged the engine
 ///   so recording never started.
+///
+/// `start()` and `stop()` must be called from the main thread/main actor:
+/// both use `MainActor.assumeIsolated` to coordinate with `MicMonitor`
+/// without an `await`. Calling either off the main thread traps at runtime.
 final class AudioRecorder {
     private let engine = AVAudioEngine()
     private var file: AVAudioFile?
@@ -16,6 +20,8 @@ final class AudioRecorder {
     private(set) var isRecording = false
 
     /// Human-readable name of the device the last recording used, for the UI.
+    /// Written during `start()` on the main thread; read from the main
+    /// thread only, no cross-thread synchronization.
     private(set) var activeDeviceDescription = "System default"
 
     static func requestMicrophoneAccess() async -> Bool {
@@ -105,10 +111,18 @@ final class AudioRecorder {
         } catch {
             // Leaving the unit on a device that failed to select would record
             // from nothing. Put it back on the system default explicitly.
+            var fallbackSucceeded = false
             if let fallback = AudioDevices.systemDefaultInput() {
-                try? input.auAudioUnit.setDeviceID(fallback.id)
+                do {
+                    try input.auAudioUnit.setDeviceID(fallback.id)
+                    fallbackSucceeded = true
+                } catch {
+                    fallbackSucceeded = false
+                }
             }
-            return "\(device.name) unavailable — using system default"
+            return fallbackSucceeded
+                ? "\(device.name) unavailable — using system default"
+                : "\(device.name) unavailable — could not switch to system default"
         }
     }
 }
