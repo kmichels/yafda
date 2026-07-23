@@ -65,8 +65,12 @@ import, or sync of any kind.
 - No change to the on-disk format. Existing `learned.json` files must load unchanged.
 
 **Sync (local branch only):**
-- `learned.json`, `dictionary.json`, `snippets.json` shared between two Macs via iCloud
+- `learned.json`, `vocabulary.json`, `snippets.json` shared between two Macs via iCloud
   Drive. History and scratchpad are explicitly excluded.
+  **Revised 2026-07-23:** `dictionary.json` was replaced as the dictionary's source of
+  truth by `vocabulary.json` (`[VocabularyEntry]`, the fork's own format — see
+  `vocabulary-dictionary-and-context-disambiguation.md`). The legacy `dictionary.json`
+  is a frozen one-time migration source and is NOT synced.
 - Merging must be non-destructive: a correction present on either machine survives.
 - Deleting a correction on one machine must not be undone by a merge from the other.
 - iCloud Drive absent, logged out, or unreachable degrades to local-only silently.
@@ -181,8 +185,13 @@ Keys per store:
 |---|---|---|
 | `learned.json` corrections | `heard.lowercased()` | higher `timesSeen` wins |
 | `learned.json` terms | the term, lowercased | union; **no delete UI exists, so removals are never inferred** |
-| `dictionary.json` | the dictionary key | prefer local |
+| `vocabulary.json` | `word.lowercased() + "\u{0}" + (misheard ?? "").lowercased()` — the same (word, misheard) pair key `VocabularyStore.migrate` dedups by | prefer local |
 | `snippets.json` | `trigger.lowercased()` | prefer local |
+
+The vocabulary key deliberately ignores each entry's `UUID id`: the two machines
+mint different UUIDs for the same logical entry (e.g. both migrated `X2D2 -> X2D II`
+independently), so keying on identity content rather than UUID is what makes the
+first merge unify them instead of duplicating every entry.
 
 Keying corrections on `heard` alone matches `LearnedStore.merging(_:heard:intended:)`,
 which already enforces one rule per phrase.
@@ -230,7 +239,7 @@ enum LearnedStore {
 struct SyncBase: Codable, Equatable {
     var corrections: [String: LearnedCorrection] = [:]
     var terms: [String] = []
-    var dictionary: [String: String] = [:]
+    var vocabulary: [String: VocabularyEntry] = [:]
     var snippets: [String: Snippet] = [:]
 }
 
@@ -355,7 +364,29 @@ Application Support.
 
 ## Implementation Notes (Living Section)
 
-_Empty - populated during implementation._
+### 2026-07-23 - Sync half reconciled with the vocabulary-dictionary feature
+
+The guardrails half shipped (upstream PR #1) in July. The sync half sat unimplemented
+while the fork grew the vocabulary dictionary (2026-07-23), which changed the ground
+under this design in three ways, now reconciled above and in the revised plan:
+
+- **`dictionary.json` is no longer the dictionary.** `VocabularyStore`/`vocabulary.json`
+  (`[VocabularyEntry {id, word, misheard?}]`) replaced it as source of truth; the legacy
+  file is a frozen one-time migration input. Sync therefore covers `vocabulary.json`,
+  not `dictionary.json`, and the merge keys on the (word, misheard) content pair, not
+  the entry UUID (each machine mints different UUIDs for the same logical entry).
+- **`VocabularyStore.load()` has side effects sync must respect**: one-time migration
+  under a double-checked `NSLock`, and corrupt-file preservation (`vocabulary.json.corrupt`).
+  Sync reads local vocabulary through `VocabularyStore.load()` so those behaviours hold,
+  and its `localIsIntact` damage check decodes `[VocabularyEntry].self`.
+- **The self-test baseline moved from 57 to 88** (mic selector + vocabulary features),
+  and `LearnedStore.runSelfTest()` is now `async`. `SyncMerge.runSelfTest()` stays
+  synchronous.
+
+First-run interplay verified by reasoning, to be proven in the plan's Task 5: on a fresh
+laptop, `VocabularyStore.load()` migrates an absent legacy file to an empty
+`vocabulary.json`; sync then sees empty local + missing base and unions with the remote,
+which can only add. Order does not matter because a missing base degrades to a union.
 
 ## Open Questions / Accepted Limitations
 

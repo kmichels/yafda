@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Share learned corrections, vocabulary, the personal dictionary and snippets between two Macs through iCloud Drive, without re-teaching anything and without one machine silently clobbering the other.
+**Goal:** Share learned corrections, the vocabulary dictionary and snippets between two Macs through iCloud Drive, without re-teaching anything and without one machine silently clobbering the other.
 
 **Architecture:** Each machine keeps a local snapshot of the state it last synced. At launch, every shared store is merged three ways — base vs local vs remote — then written to local, to iCloud, and back to the base. Deletion falls out of the diff, so no tombstones and no schema changes. `SyncMerge` is pure and carries the logic; `SyncedStore` does the file plumbing.
 
@@ -13,14 +13,16 @@
 ## Global Constraints
 
 - **Local branch only.** This ships on `local/main` and must never reach `fix/learning-guardrails` or upstream PR #1.
-- **No change to any on-disk format upstream owns.** `learned.json`, `dictionary.json`, `snippets.json` keep their exact current shapes. The only new file is `sync-base.json`, which is ours.
-- Sync covers `learned.json`, `dictionary.json`, `snippets.json`. **Not** `history.json`, **not** `scratchpad.txt`, **not** `whisper-models/`.
+- **No change to any on-disk format upstream owns.** `learned.json` and `snippets.json` keep their exact current shapes. `vocabulary.json` is the fork's own format (`[VocabularyEntry]`) and also keeps its shape. The only new file is `sync-base.json`, which is ours.
+- Sync covers `learned.json`, `vocabulary.json`, `snippets.json`. **Not** the legacy `dictionary.json` (a frozen one-time migration source superseded by `vocabulary.json` on 2026-07-23), **not** `history.json`, **not** `scratchpad.txt`, **not** `whisper-models/`.
+- Local vocabulary is read via `VocabularyStore.load()` (never a raw file decode) so its one-time migration lock and corrupt-file preservation (`vocabulary.json.corrupt`) keep working. The vocabulary merge keys on the (word, misheard) content pair — `word.lowercased() + "\u{0}" + (misheard ?? "").lowercased()` — NOT the entry `UUID`, because both machines mint different UUIDs for the same logical entry.
+- `LearnedStore.runSelfTest()` is now `async` (awaited in `Main.swift`); the new `SyncMerge.runSelfTest()` stays synchronous and is called alongside it.
 - No new third-party dependencies.
 - Tests extend the repo's existing `runSelfTest() -> Bool` convention wired to `--selftest`.
 - The base snapshot is local-only and never written to iCloud — it records what *this machine* last saw.
 - iCloud Drive absent, logged out, or a file not yet downloaded must degrade to local-only, silently. **Never treat a not-yet-downloaded file as empty** — that would merge to empty and write the emptiness back over both copies.
 - Build and test with: `swift build -c release && ./.build/release/Murmur --selftest`
-- Baseline before this plan: **57 PASS / 0 FAIL**. The four `LearnedStore` `diff(...)` invariants must stay green throughout.
+- Baseline before this plan: **88 PASS / 0 FAIL** (guardrails + mic selector + vocabulary features). The four `LearnedStore` `diff(...)` invariants must stay green throughout.
 
 ## File Structure
 
@@ -31,7 +33,7 @@
 | `Sources/Murmur/AppPaths.swift` (modify) | `syncedDirectory`, `syncBaseURL`, eviction-aware read helper. |
 | `Sources/Murmur/Main.swift:105-110` (modify) | Call `SyncedStore.syncAll()` once at launch. |
 
-`LearnedStore.swift` is already 784 lines; none of this goes in it.
+`LearnedStore.swift` is already ~1000 lines; none of this goes in it.
 
 ---
 
@@ -101,7 +103,7 @@ Wire it into `Main.swift`, replacing the two-line selftest body at `Main.swift:4
 ```swift
         case .selftest:
             let formatterPassed = TextFormatter.runSelfTest()
-            let learnedPassed = LearnedStore.runSelfTest()
+            let learnedPassed = await LearnedStore.runSelfTest()
             let syncPassed = SyncMerge.runSelfTest()
             exit(formatterPassed && learnedPassed && syncPassed ? 0 : 1)
 ```
@@ -200,7 +202,7 @@ Add to `AppPaths.swift`, inside `enum AppPaths`:
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest`
-Expected: 60 PASS, 0 FAIL, exit 0 (57 baseline + 3 new). The four `diff(...)` invariants still PASS.
+Expected: 91 PASS, 0 FAIL, exit 0 (88 baseline + 3 new). The four `diff(...)` invariants still PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -345,7 +347,7 @@ Add to `SyncMerge`, above the self test:
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest`
-Expected: 71 PASS, 0 FAIL, exit 0 (60 + 10 merge cases + 1 terms case). The four `diff(...)` invariants still PASS.
+Expected: 102 PASS, 0 FAIL, exit 0 (91 + 10 merge cases + 1 terms case). The four `diff(...)` invariants still PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -421,7 +423,7 @@ import os
 struct SyncBase: Codable, Equatable {
     var corrections: [String: LearnedCorrection] = [:]
     var terms: [String] = []
-    var dictionary: [String: String] = [:]
+    var vocabulary: [String: VocabularyEntry] = [:]
     var snippets: [String: Snippet] = [:]
 }
 
@@ -637,7 +639,7 @@ so the worst case is a read of the pre-merge file, never a torn one.
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest`
-Expected: 74 PASS, 0 FAIL, exit 0. The four `diff(...)` invariants still PASS.
+Expected: 105 PASS, 0 FAIL, exit 0 (102 + 3 Task 3 cases). The four `diff(...)` invariants still PASS.
 
 Then confirm the real store is untouched by a sync when nothing has changed:
 
@@ -657,14 +659,14 @@ git commit -m "Sync learned corrections through iCloud Drive"
 
 ---
 
-### Task 4: Sync the dictionary and snippets
+### Task 4: Sync the vocabulary and snippets
 
 **Files:**
 - Modify: `Sources/Murmur/SyncedStore.swift`
 
 **Interfaces:**
-- Consumes: `TextFormatter.dictionaryURL`, `TextFormatter.loadDictionary()`, `SnippetStore.load()`, `SnippetStore.save(_:)`
-- Produces: `SyncedStore.syncAll()` also covering `dictionary.json` and `snippets.json`
+- Consumes: `VocabularyStore.load()`, `VocabularyStore.save(_:)`, `VocabularyStore.fileURL`, `VocabularyEntry`, `SnippetStore.load()`, `SnippetStore.save(_:)`
+- Produces: `SyncedStore.syncAll()` also covering `vocabulary.json` and `snippets.json`; `SyncedStore.key(for: VocabularyEntry)`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -678,60 +680,97 @@ Add to `SyncMerge.runSelfTest()`, before `return passed`:
         if !snippetKeyOK { passed = false }
         print("\(snippetKeyOK ? "PASS" : "FAIL"): snippet key ignores trigger case")
 
-        // A dictionary entry deleted here must not return from the other Mac.
-        let dictionaryMerged = SyncMerge.merge(
-            base: ["X2D2": "X2D II", "stale": "gone"],
-            local: ["X2D2": "X2D II"],
-            remote: ["X2D2": "X2D II", "stale": "gone"]) { l, _ in l }
-        let dictionaryOK = dictionaryMerged == ["X2D2": "X2D II"]
-        if !dictionaryOK { passed = false }
-        print("\(dictionaryOK ? "PASS" : "FAIL"): deleted dictionary entry stays " +
-              "deleted = \(dictionaryMerged)")
+        // MARK: Vocabulary keying
+        // Two machines mint different UUIDs for the same logical entry, so the
+        // key must be the (word, misheard) content pair, never the id. Without
+        // this, the first merge would duplicate every migrated entry.
+        let vocabMine = VocabularyEntry(word: "X2D II", misheard: "X2D2")
+        let vocabTheirs = VocabularyEntry(word: "x2d ii", misheard: "x2d2")
+        let vocabKeyOK = SyncedStore.key(for: vocabMine) == SyncedStore.key(for: vocabTheirs)
+        if !vocabKeyOK { passed = false }
+        print("\(vocabKeyOK ? "PASS" : "FAIL"): vocabulary key is the case-insensitive " +
+              "(word, misheard) pair, not the UUID")
+
+        // A bare word and a correction with the same word are DIFFERENT entries.
+        let bareWord = VocabularyEntry(word: "Phocus", misheard: nil)
+        let correction = VocabularyEntry(word: "Phocus", misheard: "focus")
+        let vocabDistinctOK = SyncedStore.key(for: bareWord) != SyncedStore.key(for: correction)
+        if !vocabDistinctOK { passed = false }
+        print("\(vocabDistinctOK ? "PASS" : "FAIL"): bare word and correction do not collide")
+
+        // A vocabulary entry deleted here must not return from the other Mac.
+        let vBase = [SyncedStore.key(for: bareWord): bareWord,
+                     SyncedStore.key(for: correction): correction]
+        let vLocal = [SyncedStore.key(for: bareWord): bareWord]
+        let vocabularyMerged = SyncMerge.merge(
+            base: vBase, local: vLocal, remote: vBase) { l, _ in l }
+        let vocabularyOK = vocabularyMerged.count == 1
+            && vocabularyMerged.values.first?.misheard == nil
+        if !vocabularyOK { passed = false }
+        print("\(vocabularyOK ? "PASS" : "FAIL"): deleted vocabulary entry stays deleted")
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `swift build -c release 2>&1 | tail -5`
-Expected: FAIL to compile — `incorrect argument label` or `no exact matches in call to static method 'key'` (the `Snippet` overload does not exist yet if Task 3 omitted it; if it compiles, the test still fails on the dictionary case)
+Expected: FAIL to compile — `no exact matches in call to static method 'key'` (neither the `Snippet` nor the `VocabularyEntry` overload exists yet).
 
 - [ ] **Step 3: Write the implementation**
+
+Add the vocabulary key overload to `SyncedStore` (beside the existing `key(for:)` overloads):
+
+```swift
+    /// Content key for a vocabulary entry: the case-insensitive (word, misheard)
+    /// pair — the same identity `VocabularyStore.migrate` dedups by. NEVER the
+    /// UUID: each machine mints its own ids for the same logical entry.
+    static func key(for entry: VocabularyEntry) -> String {
+        entry.word.lowercased() + "\u{0}"
+            + (entry.misheard ?? "").lowercased()
+    }
+```
 
 Add to `SyncedStore`, and call both from `syncAll` after `syncLearned`:
 
 ```swift
-    private static func syncDictionary(in remoteDirectory: URL, base: inout SyncBase) {
-        let remoteURL = remoteDirectory.appendingPathComponent("dictionary.json")
-        let local = TextFormatter.loadDictionary()
+    private static func syncVocabulary(in remoteDirectory: URL, base: inout SyncBase) {
+        let remoteURL = remoteDirectory.appendingPathComponent("vocabulary.json")
+        // Read through VocabularyStore.load(), never a raw decode: it owns the
+        // one-time legacy migration (locked) and corrupt-file preservation.
+        let localEntries = Dictionary(
+            VocabularyStore.load().map { (key(for: $0), $0) },
+            uniquingKeysWith: { first, _ in first })
         let remoteData: Data
         switch AppPaths.readShared(remoteURL) {
         case .notDownloaded:
-            log.info("dictionary.json not downloaded yet; skipping this cycle")
+            log.info("vocabulary.json not downloaded yet; skipping this cycle")
             return
         case .missing:
-            guard write(local, to: remoteURL) else { return }
-            base.dictionary = local
+            guard write(Array(localEntries.values), to: remoteURL) else { return }
+            base.vocabulary = localEntries
             return
         case .ready(let data):
             remoteData = data
         }
-        guard let remote = try? JSONDecoder()
-            .decode([String: String].self, from: remoteData) else {
-            log.error("remote dictionary.json is unreadable; keeping local untouched")
+        guard let remoteList = try? JSONDecoder()
+            .decode([VocabularyEntry].self, from: remoteData) else {
+            log.error("remote vocabulary.json is unreadable; keeping local untouched")
             return
         }
+        let remoteEntries = Dictionary(
+            remoteList.map { (key(for: $0), $0) }, uniquingKeysWith: { first, _ in first })
         let merged = SyncMerge.merge(
-            base: base.dictionary, local: local, remote: remote) { localValue, _ in
-                localValue
-            }
-        if merged.isEmpty, !base.dictionary.isEmpty,
-           !localIsIntact(TextFormatter.dictionaryURL, as: [String: String].self) {
-            log.error("dictionary.json is missing or unreadable; aborting to protect iCloud")
+            base: base.vocabulary, local: localEntries,
+            remote: remoteEntries) { localValue, _ in localValue }
+        if merged.isEmpty, !base.vocabulary.isEmpty,
+           !localIsIntact(VocabularyStore.fileURL, as: [VocabularyEntry].self) {
+            log.error("vocabulary.json is missing or unreadable; aborting to protect iCloud")
             return
         }
-        log.info("dictionary.json merged: \(merged.count) entries")
-        writeLocal(merged, to: TextFormatter.dictionaryURL)
-        guard write(merged, to: remoteURL) else { return }
-        base.dictionary = merged
+        let ordered = merged.values.sorted { $0.word.lowercased() < $1.word.lowercased() }
+        log.info("vocabulary.json merged: \(ordered.count) entries")
+        VocabularyStore.save(ordered)
+        guard write(ordered, to: remoteURL) else { return }
+        base.vocabulary = merged
     }
 
     private static func syncSnippets(in remoteDirectory: URL, base: inout SyncBase) {
@@ -787,7 +826,7 @@ Replace the body of `syncAll` so all three run:
         }
         var base = loadBase()
         syncLearned(in: remoteDirectory, base: &base)
-        syncDictionary(in: remoteDirectory, base: &base)
+        syncVocabulary(in: remoteDirectory, base: &base)
         syncSnippets(in: remoteDirectory, base: &base)
         saveBase(base)
     }
@@ -799,13 +838,13 @@ All three stores now route their remote I/O through `AppPaths.readShared` and
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest`
-Expected: 76 PASS, 0 FAIL, exit 0. The four `diff(...)` invariants still PASS.
+Expected: 107 PASS, 0 FAIL, exit 0 (105 + 2 Task 4 cases). The four `diff(...)` invariants still PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add Sources/Murmur/SyncedStore.swift
-git commit -m "Sync the personal dictionary and snippets too"
+git commit -m "Sync the vocabulary and snippets too"
 ```
 
 ---
@@ -835,7 +874,7 @@ shasum ~/Library/Application\ Support/Murmur/learned.json
 shasum ~/Library/Application\ Support/Murmur/learned.json
 ls -la ~/Library/Mobile\ Documents/com~apple~CloudDocs/Murmur/
 ```
-Expected: local hash unchanged; `learned.json`, `dictionary.json`, `snippets.json` now present in iCloud; `sync-base.json` created locally in Application Support.
+Expected: local hash unchanged; `learned.json`, `vocabulary.json`, `snippets.json` now present in iCloud (NO `dictionary.json` — the legacy file is not synced); `sync-base.json` created locally in Application Support.
 
 - [ ] **Step 3: Simulate the second machine**
 
@@ -844,14 +883,15 @@ Move the local store aside so the app looks like a fresh Mac with an existing iC
 ```bash
 cd ~/Library/Application\ Support/Murmur
 mv learned.json learned.json.machine-a
-mv dictionary.json dictionary.json.machine-a
+mv vocabulary.json vocabulary.json.machine-a
+mv dictionary.json dictionary.json.machine-a 2>/dev/null || true   # legacy migration source: hide it too, or load() re-migrates it
 mv snippets.json snippets.json.machine-a 2>/dev/null || true
 mv sync-base.json sync-base.json.machine-a
 open /Users/konrad/projects/murmur/build/Murmur.app
 sleep 5
 python3 -c "import json;d=json.load(open('learned.json'));print(len(d['corrections']),'corrections,',len(d['terms']),'terms')"
 ```
-Expected: the store is repopulated from iCloud with all 13 corrections — this is the "don't re-teach the laptop" case working.
+Expected: the store is repopulated from iCloud — corrections in learned.json AND the vocabulary entries (X2D II, Phocus) in vocabulary.json. This is the "don't re-teach the laptop" case working. Also verify no duplicate vocabulary entries appeared (the content-pair key must unify the two machines' different UUIDs).
 
 - [ ] **Step 4: Prove a deletion does not come back**
 
@@ -906,7 +946,7 @@ Expected: exactly the four files of PR #1 — no `SyncMerge.swift`, no `SyncedSt
 
 | Spec requirement | Task |
 |---|---|
-| `learned.json`, `dictionary.json`, `snippets.json` shared; history and scratchpad excluded | 3, 4 |
+| `learned.json`, `vocabulary.json`, `snippets.json` shared; legacy dictionary.json, history and scratchpad excluded | 3, 4 |
 | Merging is non-destructive | 2 |
 | A deletion on one machine is not undone by the other | 2 (test), 5 step 4 (end to end) |
 | iCloud absent degrades silently to local-only | 1, 3 |
