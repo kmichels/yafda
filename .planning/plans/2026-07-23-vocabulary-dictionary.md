@@ -335,10 +335,14 @@ Add to `LearnedStore.runSelfTest()` before `return passed`:
             // Regression: a sentence-final substitution keeps its punctuation.
             ("substitution keeps trailing punctuation", ["Phocus"],
              "does the word focus.", "does the word Phocus.", true),
-            // Multi-word term: pure capitalization of already-correct words is
-            // accepted (v1's supported multi-word case).
-            ("multi-word capitalization", ["Apple Vision Pro"],
-             "i want apple vision pro", "i want Apple Vision Pro", true),
+            // Multi-word term: v1 does not substitute toward it (the term is a
+            // single Set element, never a single token), so it falls back.
+            ("multi-word term falls back (v1 unsupported)", ["Apple Vision Pro"],
+             "i want apple vision pro", "i want Apple Vision Pro", false),
+            // Loophole closed: the model may not recase an arbitrary non-vocab
+            // word and have it pass as "no change".
+            ("recasing a non-vocab word is rejected", ["Phocus"],
+             "i love my macbook", "i love my MacBook", false),
             ("rephrase changes word count", ["Phocus"],
              "send it to focus", "please send it to Phocus", false),
             ("insertion", ["Phocus"],
@@ -405,7 +409,7 @@ struct VocabularyDisambiguator {
     /// Upper bound on the on-device model call. A hung or throttled Apple
     /// Intelligence daemon must never block dictation — past this, fall back to
     /// the raw transcript.
-    private static let timeoutNanoseconds: UInt64 = 3_000_000_000  // 3s
+    private static let timeout: Duration = .seconds(3)
 
     var isAvailable: Bool {
         SystemLanguageModel.default.availability == .available
@@ -439,7 +443,7 @@ struct VocabularyDisambiguator {
                 return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
+                try? await Task.sleep(for: Self.timeout)
                 return nil
             }
             let first = await group.next() ?? nil
@@ -462,21 +466,27 @@ struct VocabularyDisambiguator {
     /// substitution to a non-vocab word is rejected — the caller then keeps the
     /// original transcript.
     static func accept(original: String, candidate: String, vocabulary: [String]) -> Bool {
-        let originalWords = original.split(separator: " ", omittingEmptySubsequences: true)
-            .map(String.init)
-        let candidateWords = candidate.split(separator: " ", omittingEmptySubsequences: true)
-            .map(String.init)
+        // Split on any whitespace (spaces, tabs, newlines), not just U+0020,
+        // so punctuation stripping and matching don't break on a stray newline.
+        let originalWords = original.split(whereSeparator: \.isWhitespace).map(String.init)
+        let candidateWords = candidate.split(whereSeparator: \.isWhitespace).map(String.init)
         guard originalWords.count == candidateWords.count else { return false }
-        // Compare on the word core: strip leading/trailing punctuation so a
-        // sentence-final "Phocus." still matches the vocab term "Phocus".
+        // Word core: strip surrounding punctuation but KEEP case, so a
+        // sentence-final "Phocus." matches the term while an unrequested
+        // capitalization change ("macbook" -> "MacBook") still counts as a real
+        // change that must justify itself against the vocabulary (closing the
+        // "the model may recase anything" loophole).
         func core(_ word: String) -> String {
-            word.trimmingCharacters(in: .punctuationCharacters).lowercased()
+            String(word.trimmingCharacters(in: .punctuationCharacters))
         }
         let vocab = Set(vocabulary.map { $0.lowercased() })
         for (originalWord, candidateWord) in zip(originalWords, candidateWords) {
             if core(originalWord) == core(candidateWord) { continue }
-            // A changed word is allowed only if its core IS a vocabulary term.
-            guard vocab.contains(core(candidateWord)) else { return false }
+            // A changed word is allowed only if it IS a vocabulary term (matched
+            // case-insensitively). A multi-word vocab term is one Set element
+            // and never equals a single token, so multi-word substitutions fall
+            // back — v1 is 1:1 whole-word substitution only.
+            guard vocab.contains(core(candidateWord).lowercased()) else { return false }
         }
         return true
     }
@@ -486,7 +496,7 @@ struct VocabularyDisambiguator {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest`
-Expected: 83 PASS, 0 FAIL, exit 0 (74 + 9). The four `diff(...)` invariants still PASS.
+Expected: 84 PASS, 0 FAIL, exit 0 (74 + 10). The four `diff(...)` invariants still PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -550,10 +560,12 @@ Leave the rest of the pipeline (`LearnedStore.apply`, `SnippetStore.expand`, sty
 
 Note: passing the correction map explicitly here means this call site does not rely on the `TextFormatter()` default from Task 2; the default still stands for every other caller.
 
+Deliberately NOT cached in memory: `VocabularyStore.load()` runs once per completed dictation — human speech cadence, immediately after a multi-hundred-millisecond recognition and audio-file I/O — so one small JSON read is negligible. An in-memory cache would need invalidation coordinated between the Dictionary UI's save and this read; that coherence cost is not justified by a sub-millisecond saving. Revisit only if profiling shows it matters.
+
 - [ ] **Step 3: Verify build and suite**
 
 Run: `swift build -c release && ./.build/release/Murmur --selftest; echo "exit=$?"`
-Expected: 83 PASS, 0 FAIL, `exit=0`. No test count change (this task is integration wiring).
+Expected: 84 PASS, 0 FAIL, `exit=0`. No test count change (this task is integration wiring).
 
 - [ ] **Step 4: Manual end-to-end check**
 
@@ -657,18 +669,24 @@ struct DictionaryPage: View {
     private func add() {
         let word = newWord.trimmingCharacters(in: .whitespaces)
         guard !word.isEmpty else { return }
-        // Don't accumulate duplicate words in the file; bias dedupes at runtime
-        // but the list would still show and persist repeats.
-        guard !entries.contains(where: { $0.word.lowercased() == word.lowercased() }) else {
+        let misheard = correctingMisspelling
+            ? newMisheard.trimmingCharacters(in: .whitespaces)
+            : ""
+        let normalizedMisheard = misheard.isEmpty ? nil : misheard
+        // Reject only an exact duplicate of the (word, misheard) pair, so a user
+        // can still map two different misheard forms ("focus", "pocus") to the
+        // same word, while a true repeat is not accumulated in the file.
+        let isDuplicate = entries.contains {
+            $0.word.lowercased() == word.lowercased()
+                && ($0.misheard?.lowercased() ?? "") == (normalizedMisheard?.lowercased() ?? "")
+        }
+        guard !isDuplicate else {
             newWord = ""
             newMisheard = ""
             correctingMisspelling = false
             return
         }
-        let misheard = correctingMisspelling
-            ? newMisheard.trimmingCharacters(in: .whitespaces)
-            : ""
-        entries.append(VocabularyEntry(word: word, misheard: misheard.isEmpty ? nil : misheard))
+        entries.append(VocabularyEntry(word: word, misheard: normalizedMisheard))
         VocabularyStore.save(entries)
         newWord = ""
         newMisheard = ""
@@ -678,6 +696,8 @@ struct DictionaryPage: View {
 ```
 
 Remove the old `struct DictionaryRow` (it is no longer referenced). If any other code references `DictionaryRow`, search for it first (`grep -rn DictionaryRow Sources/`) — nothing should, but confirm before deleting.
+
+This is an in-place replacement inside `MainView.swift`, which already has `import SwiftUI` at the top — do not add another import.
 
 - [ ] **Step 2: Verify by running the app**
 
