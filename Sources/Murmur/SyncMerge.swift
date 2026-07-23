@@ -192,6 +192,45 @@ enum SyncMerge {
         if !prunedOK { passed = false }
         print("\(prunedOK ? "PASS" : "FAIL"): pruned rule stays pruned across sync")
 
+        // MARK: Sync composition
+        // Composition: a corrupt local store with a previously-synced base must
+        // ABORT the sync (protecting the remote), not read as mass deletion.
+        do {
+            let syncTmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("murmur-selftest-synccomp", isDirectory: true)
+            try? FileManager.default.removeItem(at: syncTmp)
+            let localDir = syncTmp.appendingPathComponent("local", isDirectory: true)
+            let remoteDir = syncTmp.appendingPathComponent("remote", isDirectory: true)
+            try? FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: remoteDir, withIntermediateDirectories: true)
+            LearnedStore.directoryOverride = localDir
+            defer {
+                LearnedStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: syncTmp)
+            }
+            // Local file: corrupt. Base: says this machine had one correction.
+            try? "not json ][".write(to: LearnedStore.fileURL, atomically: true, encoding: .utf8)
+            // Remote: holds the same correction plus a new one from the other Mac.
+            let remoteCorrections = [
+                LearnedCorrection(heard: "lightrim", intended: "Lightroom", timesSeen: 2),
+                LearnedCorrection(heard: "phocus", intended: "Phocus", timesSeen: 1),
+            ]
+            var remoteData = LearnedData()
+            remoteData.corrections = remoteCorrections
+            if let bytes = try? JSONEncoder().encode(remoteData) {
+                try? bytes.write(to: remoteDir.appendingPathComponent("learned.json"))
+            }
+            var base = SyncBase()
+            base.corrections = ["lightrim": remoteCorrections[0]]
+            let baseBefore = base
+            SyncedStore.syncLearned(in: remoteDir, base: &base)
+            // Abort means: base unchanged, corrupt local file untouched, remote untouched.
+            let localStillCorrupt = (try? String(contentsOf: LearnedStore.fileURL, encoding: .utf8))?.contains("not json") == true
+            let compOK = base == baseBefore && localStillCorrupt
+            if !compOK { passed = false }
+            print("\(compOK ? "PASS" : "FAIL"): corrupt local with synced base aborts, does not mass-delete")
+        }
+
         return passed
     }
 }

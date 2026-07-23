@@ -59,8 +59,10 @@ struct LearnOutcome: Equatable {
 /// 2. `biasTerms()` feeds the user's vocabulary into the speech model
 ///    before recognition (AnalysisContext contextual strings).
 enum LearnedStore {
+    /// Tests point this at a temp directory; nil in normal operation.
+    static var directoryOverride: URL?
     static var fileURL: URL {
-        AppPaths.supportDirectory.appendingPathComponent("learned.json")
+        (directoryOverride ?? AppPaths.supportDirectory).appendingPathComponent("learned.json")
     }
 
     /// Checker used to decide whether an automatically-diffed mapping is safe
@@ -75,9 +77,14 @@ enum LearnedStore {
         return learned
     }
 
-    static func save(_ learned: LearnedData) {
-        if let data = try? JSONEncoder().encode(learned) {
-            try? data.write(to: fileURL, options: .atomic)
+    @discardableResult
+    static func save(_ learned: LearnedData) -> Bool {
+        guard let data = try? JSONEncoder().encode(learned) else { return false }
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            return false
         }
     }
 

@@ -10,6 +10,29 @@ struct SyncBase: Codable, Equatable {
     var terms: [String] = []
     var vocabulary: [String: VocabularyEntry] = [:]
     var snippets: [String: Snippet] = [:]
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case corrections, terms, vocabulary, snippets
+    }
+
+    // Synthesized Decodable fails the whole decode on any missing key, even
+    // though every property here has a default - property defaults don't
+    // apply to decoding. Without this, adding a field to SyncBase would make
+    // every existing sync-base.json on disk fail to decode, loadBase() would
+    // fall back to empty, and the next merge would read every prior sync as
+    // a union with nothing - resurrecting anything since deleted.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        corrections = try container.decodeIfPresent(
+            [String: LearnedCorrection].self, forKey: .corrections) ?? [:]
+        terms = try container.decodeIfPresent([String].self, forKey: .terms) ?? []
+        vocabulary = try container.decodeIfPresent(
+            [String: VocabularyEntry].self, forKey: .vocabulary) ?? [:]
+        snippets = try container.decodeIfPresent(
+            [String: Snippet].self, forKey: .snippets) ?? [:]
+    }
 }
 
 /// Shares learned data between this user's Macs through iCloud Drive.
@@ -77,7 +100,7 @@ enum SyncedStore {
         saveBase(base)
     }
 
-    private static func syncLearned(in remoteDirectory: URL, base: inout SyncBase) {
+    static func syncLearned(in remoteDirectory: URL, base: inout SyncBase) {
         let remoteURL = remoteDirectory.appendingPathComponent("learned.json")
 
         // Read the REMOTE first. A coordinated read can block on the iCloud
@@ -114,6 +137,23 @@ enum SyncedStore {
 
         // Blocking read is behind us: snapshot local now, so a correction the
         // user taught while we waited is merged instead of destroyed.
+        //
+        // A corrupt or missing local file loads as empty, which the diff would
+        // read as "user deleted everything" and propagate. If this machine has
+        // synced data before (non-empty base), refuse to sync this store unless
+        // the local file is present and decodes. A genuine delete-everything
+        // leaves a well-formed (possibly empty) file and still propagates -
+        // only damage is refused. Checked here, before the merge, rather than
+        // only when the merge result happens to be empty: even one surviving
+        // remote entry would previously skip this check while every base entry
+        // was still misread as a local deletion and pruned everywhere.
+        if !base.corrections.isEmpty || !base.terms.isEmpty {
+            guard localIsIntact(LearnedStore.fileURL, as: LearnedData.self) else {
+                log.error("local learned.json is missing or unreadable; skipping sync to protect the remote")
+                return
+            }
+        }
+
         let local = LearnedStore.load()
         let localCorrections = keyed(local.corrections)
         let remoteCorrections = keyed(remote.corrections)
@@ -124,16 +164,6 @@ enum SyncedStore {
         let mergedTerms = SyncMerge.mergeTerms(
             base: base.terms, local: local.terms, remote: remote.terms)
 
-        // Refuse a wipe caused by DAMAGE, but allow a real "delete everything".
-        if mergedCorrections.isEmpty, !base.corrections.isEmpty,
-           !localIsIntact(LearnedStore.fileURL, as: LearnedData.self) {
-            log.error("""
-                learned.json is missing or unreadable and the merge would empty \
-                the store; aborting so the iCloud copy survives.
-                """)
-            return
-        }
-
         var merged = LearnedData()
         merged.corrections = mergedCorrections.values.sorted { $0.heard < $1.heard }
         merged.terms = mergedTerms
@@ -143,7 +173,13 @@ enum SyncedStore {
             \(remoteCorrections.count) remote, \(merged.corrections.count) merged
             """)
 
-        LearnedStore.save(merged)
+        // Neither write may be skipped when gating the base advance: a base
+        // ahead of either copy makes the next launch read that copy's
+        // never-persisted entries as local deletions and prune them.
+        guard LearnedStore.save(merged) else {
+            log.error("local learned.json write failed; base left untouched so the next launch retries")
+            return
+        }
         guard write(merged, to: remoteURL) else {
             log.error("remote write failed; base left untouched so the next launch retries")
             return
