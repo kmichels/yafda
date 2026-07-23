@@ -267,6 +267,20 @@ enum SyncMerge {
         if !vocabularyOK { passed = false }
         print("\(vocabularyOK ? "PASS" : "FAIL"): deleted vocabulary entry stays deleted")
 
+        // Same content, different UUIDs (both machines migrated independently)
+        // must NOT read as an eternal conflict: local adopts the remote id.
+        // Exercised through the SyncedStore normalization helper.
+        let idA = VocabularyEntry(word: "X2D II", misheard: "X2D2")
+        let idB = VocabularyEntry(word: "X2D II", misheard: "X2D2")
+        // ids differ by construction - each init mints a UUID
+        let adoptKey = SyncedStore.key(for: idA)
+        let adopted = SyncedStore.adoptingRemoteIDs(
+            local: [adoptKey: idB], remote: [adoptKey: idA])
+        let adoptOK = adopted[adoptKey]?.id == idA.id
+            && adopted[adoptKey]?.word == "X2D II"
+        if !adoptOK { passed = false }
+        print("\(adoptOK ? "PASS" : "FAIL"): content-equal entries adopt the remote id")
+
         return passed
     }
 }

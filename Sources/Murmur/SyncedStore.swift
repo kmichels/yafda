@@ -69,6 +69,38 @@ enum SyncedStore {
                    uniquingKeysWith: { first, _ in first })
     }
 
+    /// Same logical entry, different UUID (each machine mints its own): adopt
+    /// the remote's id so both Macs converge on the shared identity instead of
+    /// ping-ponging conflicts whose only difference is the id.
+    static func adoptingRemoteIDs(
+        local: [String: VocabularyEntry], remote: [String: VocabularyEntry]
+    ) -> [String: VocabularyEntry] {
+        var result = local
+        for (k, remoteEntry) in remote {
+            guard var localEntry = result[k], localEntry.id != remoteEntry.id,
+                  localEntry.word == remoteEntry.word,
+                  localEntry.misheard == remoteEntry.misheard else { continue }
+            localEntry.id = remoteEntry.id
+            result[k] = localEntry
+        }
+        return result
+    }
+
+    /// Same as above for snippets: content is (`trigger`, `expansion`).
+    static func adoptingRemoteIDs(
+        local: [String: Snippet], remote: [String: Snippet]
+    ) -> [String: Snippet] {
+        var result = local
+        for (k, remoteSnippet) in remote {
+            guard var localSnippet = result[k], localSnippet.id != remoteSnippet.id,
+                  localSnippet.trigger == remoteSnippet.trigger,
+                  localSnippet.expansion == remoteSnippet.expansion else { continue }
+            localSnippet.id = remoteSnippet.id
+            result[k] = localSnippet
+        }
+        return result
+    }
+
     /// The more-confirmed correction wins; ties keep the local one.
     static func resolve(_ local: LearnedCorrection,
                         _ remote: LearnedCorrection) -> LearnedCorrection {
@@ -250,13 +282,24 @@ enum SyncedStore {
             }
         }
 
-        let localEntries = Dictionary(
+        let localEntriesRaw = Dictionary(
             VocabularyStore.load().map { (key(for: $0), $0) },
             uniquingKeysWith: { first, _ in first })
         let remoteEntries = Dictionary(
             remoteList.map { (key(for: $0), $0) }, uniquingKeysWith: { first, _ in first })
+
+        // Content-equal entries with different ids (independent migrations on
+        // each Mac) must not read as a two-way conflict. Adopt the remote id
+        // on local AND base before diffing - normalizing only local would
+        // leave a base id that matches neither side, and the id adoption
+        // itself would then look like "both changed". This normalized base
+        // is used for the merge only; it is not written back unless the sync
+        // completes and advances `base` at the bottom of this function.
+        let localEntries = adoptingRemoteIDs(local: localEntriesRaw, remote: remoteEntries)
+        let baseEntries = adoptingRemoteIDs(local: base.vocabulary, remote: remoteEntries)
+
         let merged = SyncMerge.merge(
-            base: base.vocabulary, local: localEntries,
+            base: baseEntries, local: localEntries,
             remote: remoteEntries) { localValue, _ in localValue }
 
         let ordered = merged.values.sorted { $0.word.lowercased() < $1.word.lowercased() }
@@ -314,13 +357,20 @@ enum SyncedStore {
             }
         }
 
-        let localSnippets = Dictionary(
+        let localSnippetsRaw = Dictionary(
             SnippetStore.load().map { (key(for: $0), $0) },
             uniquingKeysWith: { first, _ in first })
         let remoteSnippets = Dictionary(
             remoteList.map { (key(for: $0), $0) }, uniquingKeysWith: { first, _ in first })
+
+        // Same id-adoption fix as syncVocabulary: normalize local and base
+        // against remote before diffing, but only feed the merge - don't
+        // persist the normalized base unless the sync succeeds below.
+        let localSnippets = adoptingRemoteIDs(local: localSnippetsRaw, remote: remoteSnippets)
+        let baseSnippets = adoptingRemoteIDs(local: base.snippets, remote: remoteSnippets)
+
         let merged = SyncMerge.merge(
-            base: base.snippets, local: localSnippets,
+            base: baseSnippets, local: localSnippets,
             remote: remoteSnippets) { localValue, _ in localValue }
 
         let ordered = merged.values.sorted { $0.trigger < $1.trigger }
