@@ -936,6 +936,8 @@ enum LearnedStore {
              "send it to focus", "send it to Phocus really", false),
             ("substitution to a non-vocab word", ["Phocus"],
              "send it to focus", "send it to Lightroom", false),
+            ("newline injection is rejected", ["Phocus"],
+             "send it to focus", "send it to\nPhocus", false),
         ]
         for testCase in disambigGuardCases {
             let got = VocabularyDisambiguator.accept(

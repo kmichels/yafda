@@ -36,29 +36,39 @@ struct VocabularyDisambiguator {
         Output ONLY the resulting text — no preamble, no quotes, no explanations.
         """
 
-        // Race the model against a timeout. Capture only Strings across the
-        // task boundary (the session is built inside the child) so nothing
-        // non-Sendable crosses it.
         let input = transcript
-        let candidate: String? = await withTaskGroup(of: String?.self) { group in
-            group.addTask {
-                let session = LanguageModelSession(instructions: instructions)
-                guard let response = try? await session.respond(to: input) else { return nil }
-                return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            group.addTask {
-                try? await Task.sleep(for: Self.timeout)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+        let candidate = await Self.firstResult(within: Self.timeout) {
+            let session = LanguageModelSession(instructions: instructions)
+            guard let response = try? await session.respond(to: input) else { return nil }
+            return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         guard let candidate,
               Self.accept(original: transcript, candidate: candidate, vocabulary: vocabulary)
         else { return transcript }
         return candidate
+    }
+
+    /// Runs `operation`, returning its result, or nil if `timeout` elapses first.
+    /// Unlike a TaskGroup, this does NOT wait for a still-running operation after
+    /// the timeout: the operation task is cancelled and abandoned, so a
+    /// non-cancellable hung model call cannot make this exceed `timeout`.
+    private static func firstResult(
+        within timeout: Duration,
+        _ operation: @escaping @Sendable () async -> String?
+    ) async -> String? {
+        let gate = ResumeOnce()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            let work = Task {
+                let result = await operation()
+                gate.finish(result, continuation)
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                gate.finish(nil, continuation)
+                work.cancel()
+            }
+        }
     }
 
     /// Structural safety net. Accepts `candidate` only when every difference
@@ -75,6 +85,13 @@ struct VocabularyDisambiguator {
         let originalWords = original.split(whereSeparator: \.isWhitespace).map(String.init)
         let candidateWords = candidate.split(whereSeparator: \.isWhitespace).map(String.init)
         guard originalWords.count == candidateWords.count else { return false }
+        // Reject whitespace injection the token split is blind to: the split
+        // collapses whitespace runs, so a newline the model added (which could
+        // submit a form or break insertion) would otherwise pass. The raw
+        // transcript has no newlines at this pre-format stage.
+        if candidate.contains(where: \.isNewline), !original.contains(where: \.isNewline) {
+            return false
+        }
         // Word core: strip surrounding punctuation but KEEP case, so a
         // sentence-final "Phocus." matches the term while an unrequested
         // capitalization change ("macbook" -> "MacBook") still counts as a real
@@ -93,5 +110,19 @@ struct VocabularyDisambiguator {
             guard vocab.contains(core(candidateWord).lowercased()) else { return false }
         }
         return true
+    }
+}
+
+/// Ensures a checked continuation is resumed exactly once when two racing tasks
+/// may both try to finish it.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+    func finish(_ value: String?, _ continuation: CheckedContinuation<String?, Never>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !resumed else { return }
+        resumed = true
+        continuation.resume(returning: value)
     }
 }
