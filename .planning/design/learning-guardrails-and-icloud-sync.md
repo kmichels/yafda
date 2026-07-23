@@ -393,6 +393,36 @@ laptop, `VocabularyStore.load()` migrates an absent legacy file to an empty
 `vocabulary.json`; sync then sees empty local + missing base and unions with the remote,
 which can only add. Order does not matter because a missing base degrades to a union.
 
+### 2026-07-23 - SHIPPED. Live-proven on real data; two field findings
+
+Implemented on `local/main` (commits `3797406..1348f47`), 115 self-tests. Task 5 ran
+against the real store (backed up first): first sync seeded iCloud without changing
+local hashes; a store-less "machine B" repopulated 13 corrections / 26 terms / 2
+vocabulary entries with no duplicates; a local deletion propagated and stayed deleted;
+a re-add propagated back. The per-task reviews caught and fixed, in order: base advance
+not gated on the LOCAL write (silent save failure would have propagated as deletions);
+a wipe-guard bypassable by any remote addition (corrupt local would have mass-deleted
+both machines); UUID churn (independently-migrated same-content entries read as eternal
+conflicts - fixed by adopting remote ids); and dead `writeLocal`.
+
+**Field finding 1 - TCC.** A normal (Finder) launch has no `kTCCServiceUbiquity` grant;
+`fileExists` on CloudDocs returns false and sync silently degrades to local-only -
+exactly the accepted denial path. Sync only ran when launched from a terminal that has
+disk access. **User action on every machine: grant Murmur Full Disk Access.** Follow-up
+idea: surface "sync inactive" in the UI instead of only a log line.
+
+**Field finding 2 - first-contact seed race (final review's blocker, fixed).**
+`syncedDirectory` auto-creates `CloudDocs/Murmur/`; on a second Mac whose iCloud listing
+has not materialized yet, that manufactures an empty folder, `.missing` authorizes a
+seed, and the resulting iCloud conflict would read back as mass deletions elsewhere.
+Guard: a `.missing` inside a folder this process just created defers seeding to the
+next launch (`AppPaths.syncedDirectoryWasJustCreated`, all three stores).
+
+**Accepted residuals:** launch-only sync; ~ms lost-update window between local snapshot
+and save (launch-time, single-user); merge result above the 300-term cap trims later and
+propagates as deletion (needs >300 combined; follow-up: cap in the merge); saveBase
+failure now logged, resurrection-only by construction.
+
 ## Open Questions / Accepted Limitations
 
 - **Launch-time sync only.** A machine left running for days will not see the other's
