@@ -281,6 +281,39 @@ enum SyncMerge {
         if !adoptOK { passed = false }
         print("\(adoptOK ? "PASS" : "FAIL"): content-equal entries adopt the remote id")
 
+        // MARK: Seed guard for a just-created folder
+        // A .missing inside a folder we just created must NOT seed (the other
+        // Mac's listing may not have materialized). Exercised via syncLearned
+        // against temp dirs with the flag forced.
+        do {
+            let seedTmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("murmur-selftest-seedguard", isDirectory: true)
+            try? FileManager.default.removeItem(at: seedTmp)
+            let localDir = seedTmp.appendingPathComponent("local", isDirectory: true)
+            let remoteDir = seedTmp.appendingPathComponent("remote", isDirectory: true)
+            try? FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: remoteDir, withIntermediateDirectories: true)
+            LearnedStore.directoryOverride = localDir
+            AppPaths.syncedDirectoryWasJustCreated = true
+            defer {
+                LearnedStore.directoryOverride = nil
+                AppPaths.syncedDirectoryWasJustCreated = false
+                try? FileManager.default.removeItem(at: seedTmp)
+            }
+            var learnedData = LearnedData()
+            learnedData.corrections = [
+                LearnedCorrection(heard: "focust", intended: "Phocus", timesSeen: 1),
+            ]
+            _ = LearnedStore.save(learnedData)
+            var base = SyncBase()
+            SyncedStore.syncLearned(in: remoteDir, base: &base)
+            let remoteFileExists = FileManager.default.fileExists(
+                atPath: remoteDir.appendingPathComponent("learned.json").path)
+            let seedGuardOK = !remoteFileExists && base.corrections.isEmpty
+            if !seedGuardOK { passed = false }
+            print("\(seedGuardOK ? "PASS" : "FAIL"): missing remote in a just-created folder defers the seed")
+        }
+
         return passed
     }
 }

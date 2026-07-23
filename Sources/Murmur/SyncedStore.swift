@@ -122,8 +122,11 @@ enum SyncedStore {
     }
 
     static func saveBase(_ base: SyncBase) {
-        guard let data = try? JSONEncoder().encode(base) else { return }
-        try? data.write(to: AppPaths.syncBaseURL, options: .atomic)
+        guard let data = try? JSONEncoder().encode(base),
+              (try? data.write(to: AppPaths.syncBaseURL, options: .atomic)) != nil else {
+            log.error("sync-base.json write failed; base is stale until the next successful sync (worst case: a deleted entry resurrects)")
+            return
+        }
     }
 
     // MARK: - Sync
@@ -162,6 +165,10 @@ enum SyncedStore {
                 """)
             return
         case .missing:
+            guard !AppPaths.syncedDirectoryWasJustCreated else {
+                log.info("learned.json missing in a folder we just created; deferring seed until the folder's iCloud listing is confirmed (next launch)")
+                return
+            }
             let seed = LearnedStore.load()
             log.info("learned.json absent remotely; seeding from local")
             guard write(seed, to: remoteURL) else { return }
@@ -242,6 +249,10 @@ enum SyncedStore {
             log.info("vocabulary.json not downloaded yet; skipping this cycle")
             return
         case .missing:
+            guard !AppPaths.syncedDirectoryWasJustCreated else {
+                log.info("vocabulary.json missing in a folder we just created; deferring seed until the folder's iCloud listing is confirmed (next launch)")
+                return
+            }
             let seed = VocabularyStore.load()
             log.info("vocabulary.json absent remotely; seeding from local")
             let seedKeyed = Dictionary(
@@ -330,6 +341,10 @@ enum SyncedStore {
             log.info("snippets.json not downloaded yet; skipping this cycle")
             return
         case .missing:
+            guard !AppPaths.syncedDirectoryWasJustCreated else {
+                log.info("snippets.json missing in a folder we just created; deferring seed until the folder's iCloud listing is confirmed (next launch)")
+                return
+            }
             let seed = SnippetStore.load()
             log.info("snippets.json absent remotely; seeding from local")
             let seedKeyed = Dictionary(

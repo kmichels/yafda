@@ -31,11 +31,28 @@ enum AppPaths {
                                     isDirectory: true)
         guard FileManager.default.fileExists(atPath: cloud.path) else { return nil }
         let directory = cloud.appendingPathComponent("Murmur", isDirectory: true)
-        try? FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true)
+        let alreadyExisted = FileManager.default.fileExists(atPath: directory.path)
+        if !alreadyExisted {
+            try? FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+        }
         guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+        if !alreadyExisted {
+            syncedDirectoryWasJustCreated = true
+        }
         return directory
     }
+
+    /// True when this process created the CloudDocs/Murmur folder itself this
+    /// launch. A just-created folder is indistinguishable from one whose iCloud
+    /// listing has not materialized yet, so `.missing` inside it must not
+    /// authorize seeding — the other Mac's files may simply not be visible yet.
+    /// A genuinely-first machine defers its initial seed to its second launch
+    /// as a consequence.
+    ///
+    /// Only `syncedDirectory` may set this to true; only tests reset it to
+    /// false after simulating the just-created state.
+    static var syncedDirectoryWasJustCreated = false
 
     /// Snapshot of the state this machine last synced. Deliberately local: it
     /// records what *this* Mac saw, so it must not travel with the shared files.
