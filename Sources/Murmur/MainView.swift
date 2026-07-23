@@ -834,94 +834,99 @@ struct InsightsPage: View {
 // MARK: - Dictionary
 
 struct DictionaryPage: View {
-    @State private var rows: [DictionaryRow] = []
-    @State private var newSpoken = ""
-    @State private var newReplacement = ""
+    @State private var entries: [VocabularyEntry] = []
+    @State private var newWord = ""
+    @State private var newMisheard = ""
+    @State private var correctingMisspelling = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Dictionary")
                 .font(.system(size: 30, weight: .medium))
                 .padding(.top, 24)
-            Text("Spoken phrases are replaced in every transcript, " +
-                 "so names and jargon come out spelled your way.")
+            Text("Add names, jargon and terms you use so Murmur spells them your " +
+                 "way. A plain word biases recognition. Turn on \u{201C}Correct a " +
+                 "misspelling\u{201D} to also replace a form it keeps hearing wrong.")
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 10) {
-                ForEach($rows) { $row in
+            // Add-new card.
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Add to vocabulary").font(.headline)
+                Toggle("Correct a misspelling", isOn: $correctingMisspelling)
+                    .toggleStyle(.switch)
+                HStack {
+                    if correctingMisspelling {
+                        TextField("misheard as", text: $newMisheard)
+                            .textFieldStyle(.roundedBorder)
+                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                    }
+                    TextField("word or name", text: $newWord)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(add)
+                    Button(action: add) { Image(systemName: "plus.circle.fill") }
+                        .buttonStyle(.borderless)
+                        .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+
+            // Existing entries.
+            VStack(spacing: 8) {
+                ForEach($entries) { $entry in
                     HStack {
-                        TextField("spoken phrase", text: $row.spoken)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { save() }
-                        Image(systemName: "arrow.right")
-                            .foregroundStyle(.secondary)
-                        TextField("replacement", text: $row.replacement)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { save() }
+                        Text(entry.word)
+                        if let misheard = entry.misheard, !misheard.isEmpty {
+                            Text("\u{2190} \(misheard)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
                         Button {
-                            rows.removeAll { $0.id == row.id }
-                            save()
+                            entries.removeAll { $0.id == entry.id }
+                            VocabularyStore.save(entries)
                         } label: {
                             Image(systemName: "trash")
                         }
                         .buttonStyle(.borderless)
                     }
-                }
-                HStack {
-                    TextField("new spoken phrase", text: $newSpoken)
-                        .textFieldStyle(.roundedBorder)
-                    Image(systemName: "arrow.right")
-                        .foregroundStyle(.secondary)
-                    TextField("replacement", text: $newReplacement)
-                        .textFieldStyle(.roundedBorder)
-                    Button { add() } label: {
-                        Image(systemName: "plus.circle.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(newSpoken.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .padding(.vertical, 2)
                 }
             }
             .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
         }
-        .onAppear(perform: load)
+        .onAppear { entries = VocabularyStore.load() }
     }
 
     private func add() {
-        let spoken = newSpoken.trimmingCharacters(in: .whitespaces)
-        guard !spoken.isEmpty else { return }
-        rows.append(DictionaryRow(
-            spoken: spoken,
-            replacement: newReplacement.trimmingCharacters(in: .whitespaces)))
-        newSpoken = ""
-        newReplacement = ""
-        save()
-    }
-
-    private func load() {
-        rows = TextFormatter.loadDictionary()
-            .sorted { $0.key < $1.key }
-            .map { DictionaryRow(spoken: $0.key, replacement: $0.value) }
-    }
-
-    private func save() {
-        var dictionary: [String: String] = [:]
-        for row in rows {
-            let spoken = row.spoken.trimmingCharacters(in: .whitespaces)
-            if !spoken.isEmpty {
-                dictionary[spoken] = row.replacement
-            }
+        let word = newWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !word.isEmpty else { return }
+        let misheard = correctingMisspelling
+            ? newMisheard.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        let normalizedMisheard = misheard.isEmpty ? nil : misheard
+        // Reject only an exact duplicate of the (word, misheard) pair, so a user
+        // can still map two different misheard forms ("focus", "pocus") to the
+        // same word, while a true repeat is not accumulated in the file.
+        let isDuplicate = entries.contains {
+            $0.word.lowercased() == word.lowercased()
+                && $0.misheard?.lowercased() == normalizedMisheard?.lowercased()
         }
-        if let data = try? JSONEncoder().encode(dictionary) {
-            try? data.write(to: TextFormatter.dictionaryURL, options: .atomic)
+        guard !isDuplicate else {
+            newWord = ""
+            newMisheard = ""
+            correctingMisspelling = false
+            return
         }
+        entries.append(VocabularyEntry(word: word, misheard: normalizedMisheard))
+        VocabularyStore.save(entries)
+        newWord = ""
+        newMisheard = ""
+        correctingMisspelling = false
     }
-}
-
-struct DictionaryRow: Identifiable {
-    let id = UUID()
-    var spoken: String
-    var replacement: String
 }
 
 // MARK: - Scratchpad
