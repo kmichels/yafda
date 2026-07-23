@@ -961,6 +961,16 @@ struct ScratchpadPage: View {
 struct SettingsPage: View {
     @ObservedObject var app: AppDelegate
     @State private var supportedLocaleIDs: [String] = []
+    // Shared, not @StateObject: AudioRecorder must be able to make this exact
+    // instance yield the device before it starts recording.
+    @ObservedObject private var micMonitor = MicMonitor.shared
+    // @AppStorage, not @State: a @State copy seeded from Settings silently
+    // diverges if the preference changes anywhere else.
+    @AppStorage("inputDeviceUID") private var inputDeviceUID: String?
+    // Held in state and refreshed on hardware changes: reading
+    // AudioDevices.inputDevices() inline would leave the picker stale when a
+    // microphone is plugged in or removed while this view is open.
+    @State private var devices: [AudioInputDevice] = AudioDevices.inputDevices()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1003,6 +1013,8 @@ struct SettingsPage: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+
+            microphoneCard
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("Dictation").font(.headline)
@@ -1089,6 +1101,56 @@ struct SettingsPage: View {
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
         }
         .onAppear(perform: loadLocales)
+    }
+
+    private var microphoneCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Microphone").font(.headline)
+            Text("Murmur records from the system default unless you choose a device.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("Input", selection: $inputDeviceUID) {
+                Text("System default").tag(String?.none)
+                ForEach(devices) { device in
+                    Text(device.name).tag(String?.some(device.uid))
+                }
+            }
+            .labelsHidden()
+            .onChange(of: inputDeviceUID) { _, newValue in
+                // @AppStorage already persisted it; just re-point the meter.
+                micMonitor.stop()
+                micMonitor.start(deviceUID: newValue)
+            }
+
+            // The picker alone cannot tell you the device is working.
+            VStack(alignment: .leading, spacing: 4) {
+                ProgressView(value: Double(micMonitor.level))
+                    .progressViewStyle(.linear)
+                Text("Say something — the bar should move.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let chosen = inputDeviceUID, !devices.contains(where: { $0.uid == chosen }) {
+                Label("That microphone isn't connected. Using the system default.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+        .onAppear {
+            devices = AudioDevices.inputDevices()
+            micMonitor.viewAppeared(deviceUID: inputDeviceUID)
+        }
+        .onDisappear { micMonitor.viewDisappeared() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: .AVAudioEngineConfigurationChange)) { _ in
+            devices = AudioDevices.inputDevices()
+        }
     }
 
     private var pickerLocaleIDs: [String] {
