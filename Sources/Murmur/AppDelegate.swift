@@ -310,14 +310,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             defer { try? FileManager.default.removeItem(at: url) }
             do {
                 let raw = try await recognize(fileAt: url)
-                // Load the vocabulary once and reuse it for both the context
-                // pass and the correction map, so vocabulary.json is read a
-                // single time per dictation rather than twice.
                 let vocabEntries = VocabularyStore.load()
-                // Context pass: fix homophones toward the user's vocabulary
-                // before cleanup. No-op when the vocabulary is empty.
-                let disambiguated = await vocabularyDisambiguator.disambiguate(
-                    raw, vocabulary: VocabularyStore.words(from: vocabEntries))
+                // Context disambiguation pass is DISABLED: empirical testing
+                // showed Apple's on-device model does not do reliable
+                // context-aware homophone substitution — free-text output
+                // conversationalises (guard rejects it) and structured output
+                // hallucinates wrong 1:1 swaps ("send"->"Phocus") that pass the
+                // structural guard. It could turn "I need to focus" into "I need
+                // to Phocus". Vocabulary still drives recognition bias
+                // (LearnedStore.biasTerms) and hard corrections (below). See
+                // vocabularyDisambiguator / .planning for the redesign path.
+                _ = vocabularyDisambiguator
+                let disambiguated = raw
                 var formatted = TextFormatter(
                     dictionary: VocabularyStore.correctionMap(from: vocabEntries)
                 ).format(disambiguated)
