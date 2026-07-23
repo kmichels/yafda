@@ -806,6 +806,26 @@ enum LearnedStore {
         if !stable { passed = false }
         print("\(stable ? "PASS" : "FAIL"): enumeration is stable across calls")
 
+        // MARK: Level normalisation
+        // Linear RMS reads near zero for ordinary speech, so the bar maps
+        // -60...0 dBFS onto 0...1. These are the boundaries that matter.
+        let levelCases: [(name: String, rms: Float, expected: Float)] = [
+            ("silence clamps to 0", 0.0, 0.0),
+            ("full scale clamps to 1", 1.0, 1.0),
+            ("below floor clamps to 0", 0.0001, 0.0),
+        ]
+        for testCase in levelCases {
+            let got = MicMonitor.normalizedLevel(rms: testCase.rms)
+            let ok = abs(got - testCase.expected) < 0.001
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): level/\(testCase.name) = \(got)")
+        }
+        // Quiet speech must land in the visible middle, not pinned at either end.
+        let speech = MicMonitor.normalizedLevel(rms: 0.03)   // about -30 dBFS
+        let speechOK = speech > 0.3 && speech < 0.7
+        if !speechOK { passed = false }
+        print("\(speechOK ? "PASS" : "FAIL"): level/speech is mid-scale = \(speech)")
+
         return passed
     }
 }
