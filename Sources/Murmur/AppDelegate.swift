@@ -311,17 +311,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             do {
                 let raw = try await recognize(fileAt: url)
                 let vocabEntries = VocabularyStore.load()
-                // Context disambiguation pass is DISABLED: empirical testing
-                // showed Apple's on-device model does not do reliable
-                // context-aware homophone substitution — free-text output
-                // conversationalises (guard rejects it) and structured output
-                // hallucinates wrong 1:1 swaps ("send"->"Phocus") that pass the
-                // structural guard. It could turn "I need to focus" into "I need
-                // to Phocus". Vocabulary still drives recognition bias
-                // (LearnedStore.biasTerms) and hard corrections (below). See
-                // vocabularyDisambiguator / .planning for the redesign path.
-                _ = vocabularyDisambiguator
-                let disambiguated = raw
+                // Context pass runs only when the user opts in. Default .off is
+                // safe: the on-device model is unreliable on macOS 26 (may
+                // mis-substitute), and Private Cloud Compute is a macOS 27
+                // capability that has no on-device fallback here. Bias
+                // (LearnedStore.biasTerms) and hard corrections still apply.
+                let disambiguated: String
+                switch Settings.disambiguationEngine {
+                case .onDevice:
+                    disambiguated = await vocabularyDisambiguator.disambiguate(
+                        raw, vocabulary: VocabularyStore.words(from: vocabEntries))
+                case .privateCloudCompute, .off:
+                    disambiguated = raw
+                }
                 var formatted = TextFormatter(
                     dictionary: VocabularyStore.correctionMap(from: vocabEntries)
                 ).format(disambiguated)
@@ -447,6 +449,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 }
 
+/// How the context-aware homophone disambiguation pass runs (if at all).
+enum DisambiguationEngine: String, CaseIterable, Identifiable {
+    /// No context pass. Recognition bias + hard corrections still apply. Default.
+    case off
+    /// On-device Apple model. Experimental: unreliable on macOS 26's ~3B model
+    /// (may mis-substitute), kept for macOS 27's much stronger on-device model.
+    case onDevice
+    /// Apple Foundation Models on Private Cloud Compute — a macOS 27 capability.
+    /// Inert on macOS 26 (behaves as `off`) until the PCC model API exists.
+    case privateCloudCompute
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .onDevice: return "On-device (experimental)"
+        case .privateCloudCompute: return "Private Cloud Compute (macOS 27)"
+        }
+    }
+}
+
 enum Settings {
     private static let defaults = UserDefaults.standard
 
@@ -499,5 +522,13 @@ enum Settings {
     static var inputDeviceUID: String? {
         get { defaults.string(forKey: "inputDeviceUID") }
         set { defaults.set(newValue, forKey: "inputDeviceUID") }
+    }
+
+    /// Which engine runs the context disambiguation pass. Defaults to off — the
+    /// on-device model is unreliable on macOS 26; see VocabularyDisambiguator.
+    static var disambiguationEngine: DisambiguationEngine {
+        get { defaults.string(forKey: "disambiguationEngine")
+            .flatMap(DisambiguationEngine.init(rawValue:)) ?? .off }
+        set { defaults.set(newValue.rawValue, forKey: "disambiguationEngine") }
     }
 }

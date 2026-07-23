@@ -997,6 +997,15 @@ enum LearnedStore {
         if !passthroughOK { passed = false }
         print("\(passthroughOK ? "PASS" : "FAIL"): empty vocabulary returns the transcript unchanged")
 
+        // Disambiguation engine preference round-trips and defaults to off.
+        let savedEngine = Settings.disambiguationEngine
+        Settings.disambiguationEngine = .onDevice
+        let storesEngine = Settings.disambiguationEngine == .onDevice
+        Settings.disambiguationEngine = savedEngine
+        let engineOK = storesEngine
+        if !engineOK { passed = false }
+        print("\(engineOK ? "PASS" : "FAIL"): disambiguationEngine stores and restores")
+
         return passed
     }
 }

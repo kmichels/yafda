@@ -1073,6 +1073,28 @@ struct SettingsPage: View {
                     .labelsHidden()
                     .fixedSize()
                 }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Context correction")
+                        Text("Uses an on-device LLM to fix homophones toward your " +
+                             "dictionary (e.g. focus \u{2192} Phocus) from sentence " +
+                             "context. On-device is experimental and unreliable on " +
+                             "macOS 26; Private Cloud Compute needs macOS 27.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { Settings.disambiguationEngine },
+                        set: { Settings.disambiguationEngine = $0 })) {
+                        ForEach(DisambiguationEngine.allCases) { engine in
+                            Text(engine.displayName).tag(engine)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
                 if app.engine == "whisper" {
                     Divider()
                     HStack {
