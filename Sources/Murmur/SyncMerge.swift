@@ -163,6 +163,35 @@ enum SyncMerge {
         if !termsOK { passed = false }
         print("\(termsOK ? "PASS" : "FAIL"): mergeTerms = \(termsGot)")
 
+        // MARK: Correction keying and conflict resolution
+        // Corrections key on `heard` alone, matching LearnedStore.merging,
+        // which already enforces one rule per phrase.
+        let mine = LearnedCorrection(heard: "Lightrim", intended: "Lightroom", timesSeen: 3)
+        let theirs = LearnedCorrection(heard: "lightrim", intended: "Lightroom", timesSeen: 7)
+        let keyOK = SyncedStore.key(for: mine) == SyncedStore.key(for: theirs)
+        if !keyOK { passed = false }
+        print("\(keyOK ? "PASS" : "FAIL"): correction key ignores case")
+
+        let winner = SyncedStore.resolve(mine, theirs)
+        let resolveOK = winner.timesSeen == 7
+        if !resolveOK { passed = false }
+        print("\(resolveOK ? "PASS" : "FAIL"): colliding correction takes higher " +
+              "timesSeen = \(winner.timesSeen)")
+
+        // A store deleted on this machine must not come back from the remote.
+        let baseCorrections = [
+            "have": LearnedCorrection(heard: "have", intended: "work"),
+            "lightrim": mine,
+        ]
+        let survived = SyncMerge.merge(
+            base: baseCorrections,
+            local: ["lightrim": mine],            // "have" pruned here
+            remote: baseCorrections,              // laptop still has it
+            resolve: SyncedStore.resolve)
+        let prunedOK = survived["have"] == nil && survived["lightrim"] != nil
+        if !prunedOK { passed = false }
+        print("\(prunedOK ? "PASS" : "FAIL"): pruned rule stays pruned across sync")
+
         return passed
     }
 }

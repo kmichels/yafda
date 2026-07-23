@@ -108,6 +108,12 @@ struct MurmurMain {
             app.setActivationPolicy(.accessory)
             let delegate = AppDelegate()
             app.delegate = delegate
+            // Merge with the other Mac off the main thread. A coordinated read
+            // can block on the iCloud daemon, and a hang before `run()` would
+            // leave Murmur bouncing in the Dock with no UI at all.
+            DispatchQueue.global(qos: .userInitiated).async {
+                SyncedStore.syncAll()
+            }
             app.run()
         }
     }
