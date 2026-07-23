@@ -22,9 +22,14 @@ enum SnippetStore {
         return snippets
     }
 
-    static func save(_ snippets: [Snippet]) {
-        if let data = try? JSONEncoder().encode(snippets) {
-            try? data.write(to: fileURL, options: .atomic)
+    @discardableResult
+    static func save(_ snippets: [Snippet]) -> Bool {
+        guard let data = try? JSONEncoder().encode(snippets) else { return false }
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            return false
         }
     }
 

@@ -85,9 +85,14 @@ enum VocabularyStore {
         }
     }
 
-    static func save(_ entries: [VocabularyEntry]) {
-        if let data = try? JSONEncoder().encode(entries) {
-            try? data.write(to: fileURL, options: .atomic)
+    @discardableResult
+    static func save(_ entries: [VocabularyEntry]) -> Bool {
+        guard let data = try? JSONEncoder().encode(entries) else { return false }
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            return false
         }
     }
 

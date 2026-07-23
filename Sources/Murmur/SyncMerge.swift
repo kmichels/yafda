@@ -231,6 +231,42 @@ enum SyncMerge {
             print("\(compOK ? "PASS" : "FAIL"): corrupt local with synced base aborts, does not mass-delete")
         }
 
+        // MARK: Snippet keying
+        let snippetA = Snippet(trigger: "Sig Block", expansion: "Konrad")
+        let snippetB = Snippet(trigger: "sig block", expansion: "Konrad M")
+        let snippetKeyOK = SyncedStore.key(for: snippetA) == SyncedStore.key(for: snippetB)
+        if !snippetKeyOK { passed = false }
+        print("\(snippetKeyOK ? "PASS" : "FAIL"): snippet key ignores trigger case")
+
+        // MARK: Vocabulary keying
+        // Two machines mint different UUIDs for the same logical entry, so the
+        // key must be the (word, misheard) content pair, never the id. Without
+        // this, the first merge would duplicate every migrated entry.
+        let vocabMine = VocabularyEntry(word: "X2D II", misheard: "X2D2")
+        let vocabTheirs = VocabularyEntry(word: "x2d ii", misheard: "x2d2")
+        let vocabKeyOK = SyncedStore.key(for: vocabMine) == SyncedStore.key(for: vocabTheirs)
+        if !vocabKeyOK { passed = false }
+        print("\(vocabKeyOK ? "PASS" : "FAIL"): vocabulary key is the case-insensitive " +
+              "(word, misheard) pair, not the UUID")
+
+        // A bare word and a correction with the same word are DIFFERENT entries.
+        let bareWord = VocabularyEntry(word: "Phocus", misheard: nil)
+        let correction = VocabularyEntry(word: "Phocus", misheard: "focus")
+        let vocabDistinctOK = SyncedStore.key(for: bareWord) != SyncedStore.key(for: correction)
+        if !vocabDistinctOK { passed = false }
+        print("\(vocabDistinctOK ? "PASS" : "FAIL"): bare word and correction do not collide")
+
+        // A vocabulary entry deleted here must not return from the other Mac.
+        let vBase = [SyncedStore.key(for: bareWord): bareWord,
+                     SyncedStore.key(for: correction): correction]
+        let vLocal = [SyncedStore.key(for: bareWord): bareWord]
+        let vocabularyMerged = SyncMerge.merge(
+            base: vBase, local: vLocal, remote: vBase) { l, _ in l }
+        let vocabularyOK = vocabularyMerged.count == 1
+            && vocabularyMerged.values.first?.misheard == nil
+        if !vocabularyOK { passed = false }
+        print("\(vocabularyOK ? "PASS" : "FAIL"): deleted vocabulary entry stays deleted")
+
         return passed
     }
 }

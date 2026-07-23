@@ -55,6 +55,14 @@ enum SyncedStore {
         snippet.trigger.lowercased()
     }
 
+    /// Content key for a vocabulary entry: the case-insensitive (word, misheard)
+    /// pair — the same identity `VocabularyStore.migrate` dedups by. NEVER the
+    /// UUID: each machine mints its own ids for the same logical entry.
+    static func key(for entry: VocabularyEntry) -> String {
+        entry.word.lowercased() + "\u{0}"
+            + (entry.misheard ?? "").lowercased()
+    }
+
     private static func keyed(
         _ corrections: [LearnedCorrection]) -> [String: LearnedCorrection] {
         Dictionary(corrections.map { (key(for: $0), $0) },
@@ -97,6 +105,8 @@ enum SyncedStore {
         }
         var base = loadBase()
         syncLearned(in: remoteDirectory, base: &base)
+        syncVocabulary(in: remoteDirectory, base: &base)
+        syncSnippets(in: remoteDirectory, base: &base)
         saveBase(base)
     }
 
@@ -186,6 +196,145 @@ enum SyncedStore {
         }
         base.corrections = mergedCorrections
         base.terms = mergedTerms
+    }
+
+    private static func syncVocabulary(in remoteDirectory: URL, base: inout SyncBase) {
+        let remoteURL = remoteDirectory.appendingPathComponent("vocabulary.json")
+        // Read the REMOTE first: the coordinated iCloud read can block, and a
+        // local snapshot taken before it would overwrite anything the user
+        // adds meanwhile (same race Task 3 fixed in syncLearned). Snapshot
+        // local only after the blocking read returns.
+        let remoteData: Data
+        switch AppPaths.readShared(remoteURL) {
+        case .notDownloaded:
+            log.info("vocabulary.json not downloaded yet; skipping this cycle")
+            return
+        case .missing:
+            let seed = VocabularyStore.load()
+            log.info("vocabulary.json absent remotely; seeding from local")
+            let seedKeyed = Dictionary(
+                seed.map { (key(for: $0), $0) }, uniquingKeysWith: { first, _ in first })
+            // Seed sorted, matching what every subsequent merge writes.
+            let sorted = seed.sorted { $0.word.lowercased() < $1.word.lowercased() }
+            guard write(sorted, to: remoteURL) else { return }
+            base.vocabulary = seedKeyed
+            return
+        case .ready(let data):
+            remoteData = data
+        }
+        guard let remoteList = try? JSONDecoder().decode([VocabularyEntry].self, from: remoteData)
+        else {
+            log.error("remote vocabulary.json is unreadable; keeping local untouched")
+            return
+        }
+
+        // Blocking read is behind us: snapshot local now, so an entry the
+        // user added while we waited is merged instead of destroyed.
+        //
+        // A corrupt or missing local file loads as empty, which the diff would
+        // read as "user deleted everything" and propagate. If this machine has
+        // synced data before (non-empty base), refuse to sync this store unless
+        // the local file is present and decodes. A genuine delete-everything
+        // leaves a well-formed (possibly empty) file and still propagates -
+        // only damage is refused. Checked here, before the merge, rather than
+        // only when the merge result happens to be empty.
+        //
+        // Note: VocabularyStore.load() on a corrupt file preserves it as
+        // .corrupt and returns [], removing vocabulary.json in the process.
+        // localIsIntact then finds no file at all and reports false, so this
+        // guard still catches it even though load() already "handled" it.
+        if !base.vocabulary.isEmpty {
+            guard localIsIntact(VocabularyStore.fileURL, as: [VocabularyEntry].self) else {
+                log.error("local vocabulary.json is missing or unreadable; skipping sync to protect the remote")
+                return
+            }
+        }
+
+        let localEntries = Dictionary(
+            VocabularyStore.load().map { (key(for: $0), $0) },
+            uniquingKeysWith: { first, _ in first })
+        let remoteEntries = Dictionary(
+            remoteList.map { (key(for: $0), $0) }, uniquingKeysWith: { first, _ in first })
+        let merged = SyncMerge.merge(
+            base: base.vocabulary, local: localEntries,
+            remote: remoteEntries) { localValue, _ in localValue }
+
+        let ordered = merged.values.sorted { $0.word.lowercased() < $1.word.lowercased() }
+        log.info("vocabulary.json merged: \(ordered.count) entries")
+
+        // Neither write may be skipped when gating the base advance: a base
+        // ahead of either copy makes the next launch read that copy's
+        // never-persisted entries as local deletions and prune them.
+        guard VocabularyStore.save(ordered) else {
+            log.error("local vocabulary.json write failed; base left untouched so the next launch retries")
+            return
+        }
+        guard write(ordered, to: remoteURL) else {
+            log.error("remote write failed; base left untouched so the next launch retries")
+            return
+        }
+        base.vocabulary = merged
+    }
+
+    private static func syncSnippets(in remoteDirectory: URL, base: inout SyncBase) {
+        let remoteURL = remoteDirectory.appendingPathComponent("snippets.json")
+        // Remote first, local snapshot after — same race fix as syncLearned
+        // and syncVocabulary: the coordinated read can block, and a pre-read
+        // local snapshot would overwrite a snippet added meanwhile.
+        let remoteData: Data
+        switch AppPaths.readShared(remoteURL) {
+        case .notDownloaded:
+            log.info("snippets.json not downloaded yet; skipping this cycle")
+            return
+        case .missing:
+            let seed = SnippetStore.load()
+            log.info("snippets.json absent remotely; seeding from local")
+            let seedKeyed = Dictionary(
+                seed.map { (key(for: $0), $0) }, uniquingKeysWith: { first, _ in first })
+            let sorted = seed.sorted { $0.trigger < $1.trigger }
+            guard write(sorted, to: remoteURL) else { return }
+            base.snippets = seedKeyed
+            return
+        case .ready(let data):
+            remoteData = data
+        }
+        guard let remoteList = try? JSONDecoder().decode([Snippet].self, from: remoteData)
+        else {
+            log.error("remote snippets.json is unreadable; keeping local untouched")
+            return
+        }
+
+        // Blocking read is behind us: snapshot local now, so a snippet the
+        // user added while we waited is merged instead of destroyed. See
+        // syncVocabulary/syncLearned for why this check runs before the merge.
+        if !base.snippets.isEmpty {
+            guard localIsIntact(SnippetStore.fileURL, as: [Snippet].self) else {
+                log.error("local snippets.json is missing or unreadable; skipping sync to protect the remote")
+                return
+            }
+        }
+
+        let localSnippets = Dictionary(
+            SnippetStore.load().map { (key(for: $0), $0) },
+            uniquingKeysWith: { first, _ in first })
+        let remoteSnippets = Dictionary(
+            remoteList.map { (key(for: $0), $0) }, uniquingKeysWith: { first, _ in first })
+        let merged = SyncMerge.merge(
+            base: base.snippets, local: localSnippets,
+            remote: remoteSnippets) { localValue, _ in localValue }
+
+        let ordered = merged.values.sorted { $0.trigger < $1.trigger }
+        log.info("snippets.json merged: \(ordered.count) snippets")
+
+        guard SnippetStore.save(ordered) else {
+            log.error("local snippets.json write failed; base left untouched so the next launch retries")
+            return
+        }
+        guard write(ordered, to: remoteURL) else {
+            log.error("remote write failed; base left untouched so the next launch retries")
+            return
+        }
+        base.snippets = merged
     }
 
     /// Whether a local store file is present and decodes cleanly.
