@@ -222,7 +222,50 @@ Extends `runSelfTest()`.
 
 ## Implementation Notes (Living Section)
 
-_Empty - populated during implementation._
+### 2026-07-23 - Built, then the context pass (#3) was gated off after empirical failure
+
+Shipped on `local/main` (commits `68fddae..c5921e4`), 88 self-tests. What landed vs the spec:
+
+**Working and live:** `VocabularyStore` (with the corrupt-file fix below), recognition bias
+via `LearnedStore.biasTerms()`, hard corrections through `TextFormatter(dictionary:)`, and the
+Wispr-style `DictionaryPage`. Migration of the user's real `dictionary.json` (`X2D2 -> X2D II`)
+verified.
+
+**The context disambiguation pass (#3) does NOT work on macOS 26 - gated OFF by default.**
+Empirical testing (standalone `swiftc` probes against the live `SystemLanguageModel`) showed the
+on-device ~3B model cannot do reliable context-aware homophone substitution, across every framing:
+- Free-text rewrite -> the model conversationalises (answers the sentence; emits HTML/email drafts).
+  The `accept` guard correctly rejects these (word count differs), so it is safe but useless.
+- `@Generable` structured output -> follows the format but hallucinates wrong 1:1 swaps
+  (`send -> Phocus`, `cull -> X2D II`), which pass the structural guard and would corrupt output.
+- `Guardrails.permissiveContentTransformations` -> still conversationalises.
+- Pure YES/NO classification -> uselessly conservative (always NO, never fires).
+Root cause is partly capability and partly that the small model has no world-knowledge of niche
+proper nouns (Phocus = an obscure Hasselblad app). See `reference_foundationmodels` in agent memory.
+
+**Design change: a user-facing engine toggle instead of always-on.** `Settings.disambiguationEngine`
+(`DisambiguationEngine`: `.off` default / `.onDevice` experimental / `.privateCloudCompute`). The
+transcribe pipeline switches on it: `.onDevice` runs `VocabularyDisambiguator.disambiguate`,
+`.privateCloudCompute` and `.off` fall through to the raw transcript. Default `.off` is safe
+(bias + hard corrections still apply). `.onDevice` is opt-in for experimentation despite being
+unreliable. `.privateCloudCompute` is a **stub** - inert on macOS 26.
+
+**macOS 27 is the real fix.** FoundationModels on macOS 27 (WWDC26) adds developer access to
+next-gen Apple Foundation Models on **Private Cloud Compute** ("no cloud API cost" for App Store
+Small Business Program apps, frontier intelligence, private) AND a pluggable Language Model protocol
+(Claude/Gemini/any provider). Re-enabling #3 there is: wire the `.privateCloudCompute` case to a
+PCC-backed model and flip the toggle - config, not a rewrite. `VocabularyDisambiguator` (guard +
+non-draining timeout) is complete and tested, waiting for a capable model.
+
+### 2026-07-23 - Corrupt-file data-loss fix (both final reviews)
+
+`VocabularyStore.load()` originally treated a corrupt/undecodable `vocabulary.json` identically to a
+missing one and re-migrated over it, silently discarding UI-added entries (and it would trigger on
+any future schema change to `VocabularyEntry`). Fixed with a three-state read
+(`decoded`/`corrupt`/`missing`): a corrupt file is moved to `vocabulary.json.corrupt` for recovery
+and the store starts empty rather than overwriting. Also added a `directoryOverride` test seam so the
+self-tests run against a temp dir and never mutate the user's real file (the other final-review
+finding).
 
 ## Open Questions / Deliberate Exclusions
 
