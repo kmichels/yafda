@@ -67,7 +67,17 @@ enum AppPaths {
             try? manager.startDownloadingUbiquitousItem(at: url)
             return .notDownloaded
         }
-        guard manager.fileExists(atPath: url.path) else { return .missing }
+        guard manager.fileExists(atPath: url.path) else {
+            // fileExists cannot distinguish "absent" from "permission denied", and
+            // .missing is the signal that authorizes seeding local data over the
+            // remote. Only report it when the parent directory is provably
+            // listable — any doubt resolves to .notDownloaded (skip this cycle).
+            guard (try? FileManager.default.contentsOfDirectory(
+                atPath: url.deletingLastPathComponent().path)) != nil else {
+                return .notDownloaded
+            }
+            return .missing
+        }
 
         var coordinationError: NSError?
         // Default to .notDownloaded so a failed read skips the cycle rather
@@ -79,7 +89,7 @@ enum AppPaths {
                 result = .ready(data)
             }
         }
-        return result
+        return coordinationError == nil ? result : .notDownloaded
     }
 
     /// Atomically writes a shared file, coordinating with the iCloud daemon so

@@ -41,6 +41,22 @@ enum SyncMerge {
         if !evictedOK { passed = false }
         print("\(evictedOK ? "PASS" : "FAIL"): evicted file reports .notDownloaded")
 
+        // The paths that actually move bytes: writeShared then readShared must
+        // round-trip exact data as .ready. Uses supportDirectory (always
+        // present) so the test runs even when iCloud Drive is absent.
+        let probeURL = AppPaths.supportDirectory
+            .appendingPathComponent("sync-write-probe.json")
+        let probeData = Data(#"{"probe":true}"#.utf8)
+        let wrote = AppPaths.writeShared(probeData, to: probeURL)
+        var roundTrip = false
+        if case .ready(let got) = AppPaths.readShared(probeURL), got == probeData {
+            roundTrip = true
+        }
+        try? FileManager.default.removeItem(at: probeURL)
+        let writeOK = wrote && roundTrip
+        if !writeOK { passed = false }
+        print("\(writeOK ? "PASS" : "FAIL"): writeShared/readShared round-trip .ready")
+
         return passed
     }
 }
