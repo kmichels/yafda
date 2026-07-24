@@ -1,4 +1,5 @@
 import Accelerate
+import AppKit
 import AVFoundation
 import Foundation
 import os
@@ -85,6 +86,45 @@ final class MicMonitor: ObservableObject {
         stop()
     }
 
+    /// Window notifications that must close the microphone, and the one that
+    /// may reopen it. Named constants so the self-test drives the same list the
+    /// app registers, rather than a copy that can drift.
+    static let hidingNotifications: [Notification.Name] = [
+        NSWindow.willCloseNotification, NSWindow.didMiniaturizeNotification,
+    ]
+    static let showingNotification = NSWindow.didDeminiaturizeNotification
+
+    private var windowObservers: [NSObjectProtocol] = []
+
+    /// Registers the window notifications that gate the microphone.
+    ///
+    /// Owned here rather than in `AppDelegate` so the wiring itself is
+    /// testable. The gate is only as good as its trigger: the shipped bug was
+    /// correct logic that nothing ever called.
+    ///
+    /// `queue: nil` deliberately — the block then runs synchronously on the
+    /// posting thread, so the microphone closes as part of the window closing
+    /// rather than a runloop turn later. The same asynchronous-delivery hazard
+    /// is already documented for the recording handover below.
+    func observeVisibility(of object: AnyObject) {
+        let center = NotificationCenter.default
+        windowObservers.forEach(center.removeObserver)
+        windowObservers = Self.hidingNotifications.map { name in
+            center.addObserver(forName: name, object: object, queue: nil) { _ in
+                MainActor.assumeIsolated {
+                    MicMonitor.shared.windowVisibilityChanged(visible: false)
+                }
+            }
+        }
+        windowObservers.append(
+            center.addObserver(forName: Self.showingNotification,
+                               object: object, queue: nil) { _ in
+                MainActor.assumeIsolated {
+                    MicMonitor.shared.windowVisibilityChanged(visible: true)
+                }
+            })
+    }
+
     /// Called from AppKit when the dashboard window opens, closes or is
     /// minimised. SwiftUI's own lifecycle cannot be trusted here — see
     /// `windowHidden`.
@@ -136,11 +176,30 @@ final class MicMonitor: ObservableObject {
         mic.resumeAfterRecording()
         let closedDuringRecording = !mic.shouldBeRunning
 
+        // The notifications must actually be wired. Without this, deleting the
+        // registration leaves every test above passing and reintroduces the
+        // exact bug: correct gating logic that nothing ever calls.
+        let probe = NSObject()
+        mic.observeVisibility(of: probe)
+        mic.windowVisibilityChanged(visible: true)
+        mic.viewAppeared(deviceUID: nil)
+        var wiredClose = true
+        for name in MicMonitor.hidingNotifications {
+            mic.windowVisibilityChanged(visible: true)
+            NotificationCenter.default.post(name: name, object: probe)
+            wiredClose = wiredClose && !mic.shouldBeRunning
+        }
+        NotificationCenter.default.post(
+            name: MicMonitor.showingNotification, object: probe)
+        let wiredOpen = mic.shouldBeRunning
+
         mic.windowVisibilityChanged(visible: true)
         mic.viewDisappeared()
         if restore { mic.viewAppeared(deviceUID: nil) }
 
         for (label, ok) in [
+            ("every hiding notification closes the mic", wiredClose),
+            ("deminiaturising reopens it", wiredOpen),
             ("card hidden keeps it off", cardHidden),
             ("card shown with window open turns it on", cardShown),
             ("closing the window turns it off even with the card shown",
