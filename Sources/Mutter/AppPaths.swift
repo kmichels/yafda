@@ -1,22 +1,78 @@
 import Foundation
+import os
 
 enum AppPaths {
+    private static let log = Logger(subsystem: "local.mutter", category: "AppPaths")
+
+    /// Every name this app's data folder has had, newest first. The app has
+    /// been renamed twice (WhisperFlow -> Murmur -> Mutter) and each rename
+    /// has to keep carrying the one before it, or a machine that skipped a
+    /// generation silently starts empty.
+    static let dataDirectoryNames = ["Mutter", "Murmur", "WhisperFlow"]
+
     static var supportDirectory: URL {
         let base = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let directory = base.appendingPathComponent("Murmur", isDirectory: true)
-
-        // One-time migration from the app's pre-rename data folder, so
-        // history, dictionary, snippets and scratchpad survive.
-        let legacy = base.appendingPathComponent("WhisperFlow", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: directory.path),
-           FileManager.default.fileExists(atPath: legacy.path) {
-            try? FileManager.default.moveItem(at: legacy, to: directory)
-        }
-
+        let directory = migrateDataDirectory(in: base, names: dataDirectoryNames)
         try? FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    /// Adopts the newest surviving legacy data folder under `names[0]` and
+    /// returns that URL. Split out of `supportDirectory` so the self-test can
+    /// drive it against a scratch directory instead of the real one.
+    ///
+    /// The guard is "target absent **or empty**", deliberately, not "target
+    /// absent". Reading `supportDirectory` *creates* the folder as a side
+    /// effect, so with an absence-only guard a single `--selftest` run — or any
+    /// launch before the data was moved — closes the migration window forever
+    /// and strands the real folder, models and all, with no error raised
+    /// anywhere. An empty folder must therefore never count as "already
+    /// migrated". A *populated* target always wins and is never overwritten.
+    @discardableResult
+    static func migrateDataDirectory(in base: URL, names: [String]) -> URL {
+        let manager = FileManager.default
+        guard let current = names.first else { return base }
+        let directory = base.appendingPathComponent(current, isDirectory: true)
+        guard isAbsentOrEmpty(directory) else { return directory }
+
+        for legacyName in names.dropFirst() {
+            let legacy = base.appendingPathComponent(legacyName, isDirectory: true)
+            guard !isAbsentOrEmpty(legacy) else { continue }
+            do {
+                // moveItem throws if anything is at the destination, including
+                // the empty directory a previous read just created.
+                if manager.fileExists(atPath: directory.path) {
+                    try manager.removeItem(at: directory)
+                }
+                try manager.moveItem(at: legacy, to: directory)
+                log.notice("""
+                    Migrated data directory \(legacyName, privacy: .public) \
+                    to \(current, privacy: .public)
+                    """)
+            } catch {
+                // Never swallow this. A failed migration presents as a
+                // factory-fresh app, which is indistinguishable from data loss
+                // unless something says so.
+                log.error("""
+                    Failed migrating data directory \(legacyName, privacy: .public) \
+                    to \(current, privacy: .public): \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+            return directory
+        }
+        return directory
+    }
+
+    /// True when the folder is missing, or exists with no real contents.
+    /// Finder litter does not make a folder "in use".
+    static func isAbsentOrEmpty(_ url: URL) -> Bool {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: url.path) else { return true }
+        let contents = (try? manager.contentsOfDirectory(atPath: url.path)) ?? []
+        return contents.allSatisfy { $0 == ".DS_Store" }
     }
 
     /// Folder shared between this user's Macs, or nil when iCloud Drive is

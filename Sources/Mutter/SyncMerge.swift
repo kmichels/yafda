@@ -117,6 +117,82 @@ enum SyncMerge {
         if !writeOK { passed = false }
         print("\(writeOK ? "PASS" : "FAIL"): writeShared/readShared round-trip .ready")
 
+        // MARK: Data-directory migration
+        // Renaming the app renames its Application Support folder. Getting this
+        // wrong strands every store plus 3+ GB of Whisper models under the old
+        // name, and the app comes up looking factory-fresh. Driven against a
+        // scratch base so it never touches the real folder.
+        func migrationCase(_ label: String,
+                           setUp: (URL) -> Void,
+                           expect: (URL) -> Bool) {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mutter-selftest-migrate-\(UUID().uuidString)",
+                                        isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: scratch, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            setUp(scratch)
+            AppPaths.migrateDataDirectory(in: scratch, names: ["New", "Old", "Ancient"])
+            let ok = expect(scratch)
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): migrate/\(label)")
+        }
+
+        func seed(_ base: URL, _ name: String, file: String = "learned.json") {
+            let directory = base.appendingPathComponent(name, isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            try? Data("{}".utf8).write(
+                to: directory.appendingPathComponent(file))
+        }
+
+        func hasFile(_ base: URL, _ name: String, _ file: String = "learned.json") -> Bool {
+            FileManager.default.fileExists(
+                atPath: base.appendingPathComponent(name)
+                    .appendingPathComponent(file).path)
+        }
+
+        migrationCase("legacy folder is adopted under the new name",
+                      setUp: { seed($0, "Old") },
+                      expect: { hasFile($0, "New") && !hasFile($0, "Old") })
+
+        // The bug that motivated the rewrite: merely reading supportDirectory
+        // creates the folder, so a self-test run before the first real launch
+        // used to close the migration window permanently.
+        migrationCase("an empty new folder does not block migration",
+                      setUp: { base in
+                          seed(base, "Old")
+                          try? FileManager.default.createDirectory(
+                              at: base.appendingPathComponent("New", isDirectory: true),
+                              withIntermediateDirectories: true)
+                      },
+                      expect: { hasFile($0, "New") && !hasFile($0, "Old") })
+
+        migrationCase("a populated new folder is never overwritten",
+                      setUp: { base in
+                          seed(base, "Old", file: "old.json")
+                          seed(base, "New", file: "new.json")
+                      },
+                      expect: { hasFile($0, "New", "new.json")
+                          && !hasFile($0, "New", "old.json")
+                          && hasFile($0, "Old", "old.json") })
+
+        migrationCase("migration chains from the oldest name when it is the only one",
+                      setUp: { seed($0, "Ancient") },
+                      expect: { hasFile($0, "New") && !hasFile($0, "Ancient") })
+
+        migrationCase("the newest legacy wins when two survive",
+                      setUp: { base in
+                          seed(base, "Old", file: "old.json")
+                          seed(base, "Ancient", file: "ancient.json")
+                      },
+                      expect: { hasFile($0, "New", "old.json")
+                          && hasFile($0, "Ancient", "ancient.json") })
+
+        migrationCase("nothing to migrate is not an error",
+                      setUp: { _ in },
+                      expect: { !hasFile($0, "New") })
+
         // MARK: Three-way merge
         // Values are plain strings; `resolve` prefers local on a real conflict.
         func merged(_ base: [String: String], _ local: [String: String],

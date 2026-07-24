@@ -23,12 +23,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Deliberately still local.murmur while the app is named Mutter. The
-         bundle id is the key for every TCC grant (Accessibility, Microphone,
-         iCloud Drive); changing it costs a re-grant. Renamed separately in
-         phase 2 of .planning/design/rename-to-mutter.md, not here. -->
+    <!-- Changing this orphans every TCC grant (Accessibility, Microphone,
+         iCloud Drive) and the whole UserDefaults domain, because both are
+         keyed on the bundle id. Settings.migrateLegacyDefaults carries the
+         preferences across; the permissions have to be re-granted by hand. -->
     <key>CFBundleIdentifier</key>
-    <string>local.murmur</string>
+    <string>local.mutter</string>
     <key>CFBundleName</key>
     <string>Mutter</string>
     <key>CFBundleExecutable</key>

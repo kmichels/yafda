@@ -180,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
         process.arguments = [
             "reset", "Accessibility",
-            Bundle.main.bundleIdentifier ?? "local.murmur",
+            Bundle.main.bundleIdentifier ?? "local.mutter",
         ]
         try? process.run()
         process.waitUntilExit()
@@ -446,89 +446,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(history.entries[sender.tag].text, forType: .string)
-    }
-}
-
-/// How the context-aware homophone disambiguation pass runs (if at all).
-enum DisambiguationEngine: String, CaseIterable, Identifiable {
-    /// No context pass. Recognition bias + hard corrections still apply. Default.
-    case off
-    /// On-device Apple model. Experimental: unreliable on macOS 26's ~3B model
-    /// (may mis-substitute), kept for macOS 27's much stronger on-device model.
-    case onDevice
-    /// Apple Foundation Models on Private Cloud Compute — a macOS 27 capability.
-    /// Inert on macOS 26 (behaves as `off`) until the PCC model API exists.
-    case privateCloudCompute
-
-    var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .off: return "Off"
-        case .onDevice: return "On-device (experimental)"
-        case .privateCloudCompute: return "Private Cloud Compute (macOS 27)"
-        }
-    }
-}
-
-enum Settings {
-    private static let defaults = UserDefaults.standard
-
-    /// One-time import of preferences saved under the app's pre-rename
-    /// bundle id (local.whisperflow). Call before anything reads Settings.
-    static func migrateLegacyDefaults() {
-        guard defaults.object(forKey: "hotkey") == nil,
-              defaults.object(forKey: "locale") == nil,
-              let legacy = UserDefaults(suiteName: "local.whisperflow")
-        else { return }
-        for key in ["hotkey", "locale", "styleDefault", "styleOverrides"] {
-            if defaults.object(forKey: key) == nil,
-               let value = legacy.object(forKey: key) {
-                defaults.set(value, forKey: key)
-            }
-        }
-    }
-
-    static var hotkey: HotkeyMonitor.Hotkey {
-        get {
-            HotkeyMonitor.Hotkey(
-                rawValue: defaults.string(forKey: "hotkey") ?? "") ?? .fn
-        }
-        set { defaults.set(newValue.rawValue, forKey: "hotkey") }
-    }
-
-    static var localeIdentifier: String {
-        get { defaults.string(forKey: "locale") ?? "en-US" }
-        set { defaults.set(newValue, forKey: "locale") }
-    }
-
-    /// Recognition engine: "apple" (instant) or "whisper" (precise).
-    static var engine: String {
-        get { defaults.string(forKey: "engine") ?? "apple" }
-        set { defaults.set(newValue, forKey: "engine") }
-    }
-
-    static var whisperModel: String {
-        get { defaults.string(forKey: "whisperModel") ?? "small" }
-        set { defaults.set(newValue, forKey: "whisperModel") }
-    }
-
-    static var locale: Locale {
-        Locale(identifier: localeIdentifier)
-    }
-
-    /// UID of the microphone to record from, or nil to follow the system
-    /// default. A UID rather than an AudioObjectID because IDs are ephemeral
-    /// handles that change between launches.
-    static var inputDeviceUID: String? {
-        get { defaults.string(forKey: "inputDeviceUID") }
-        set { defaults.set(newValue, forKey: "inputDeviceUID") }
-    }
-
-    /// Which engine runs the context disambiguation pass. Defaults to off — the
-    /// on-device model is unreliable on macOS 26; see VocabularyDisambiguator.
-    static var disambiguationEngine: DisambiguationEngine {
-        get { defaults.string(forKey: "disambiguationEngine")
-            .flatMap(DisambiguationEngine.init(rawValue:)) ?? .off }
-        set { defaults.set(newValue.rawValue, forKey: "disambiguationEngine") }
     }
 }
