@@ -59,10 +59,28 @@ cd mutter
 open build/Mutter.app
 ```
 
-Optional: run `./scripts/make_signing_cert.sh` once to create a local
-self-signed signing certificate — this keeps macOS permission grants valid
-across rebuilds. Without it the app is ad-hoc signed and you'll need to
-re-grant Accessibility after each rebuild.
+### Code signing (read this before copying the app anywhere)
+
+Run `./scripts/make_signing_cert.sh` once to create a local self-signed
+signing certificate. This keeps macOS permission grants valid across
+rebuilds; without it the app is ad-hoc signed and you'll re-grant
+Accessibility after every rebuild.
+
+Two consequences worth knowing up front:
+
+- **The certificate is per-machine.** Each Mac creates its own, and although
+  they share a name they are different keys. macOS ties a permission grant to
+  the specific certificate, so **a build from one Mac will not carry its
+  permissions to another** — copying `Mutter.app` across machines gets you an
+  app that has to re-request everything, or silently fails to type. Build on
+  each Mac instead. It takes under a minute.
+- **The certificate is called `WhisperFlow Dev` and must stay that way.** The
+  app has been renamed twice since (WhisperFlow → Murmur → Mutter), so the
+  name looks like leftover cruft and is a tempting thing to tidy up. Don't.
+  The certificate forms half of the designated requirement macOS uses to
+  recognise this app, so reissuing it under a current name invalidates the
+  signature and drops every permission grant on that machine. The stale name
+  is load-bearing.
 
 ### One-time permissions
 
