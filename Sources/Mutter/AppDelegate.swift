@@ -113,10 +113,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             newWindow.isReleasedWhenClosed = false
             newWindow.center()
             window = newWindow
+            observeWindowVisibility(newWindow)
         }
+        MicMonitor.shared.windowVisibilityChanged(visible: true)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         refreshPermissions()
+    }
+
+    /// Keeps the level meter tied to whether the window is actually on screen.
+    ///
+    /// The window is created once and retained, so closing it leaves the
+    /// SwiftUI view tree alive and `.onDisappear` never fires. Without this the
+    /// microphone stays open after the user closes the dashboard — system
+    /// recording indicator lit, no window on screen, no way to tell why.
+    private func observeWindowVisibility(_ window: NSWindow) {
+        let center = NotificationCenter.default
+        for name in [NSWindow.willCloseNotification,
+                     NSWindow.didMiniaturizeNotification] {
+            center.addObserver(forName: name, object: window, queue: .main) { _ in
+                MainActor.assumeIsolated {
+                    MicMonitor.shared.windowVisibilityChanged(visible: false)
+                }
+            }
+        }
+        center.addObserver(
+            forName: NSWindow.didDeminiaturizeNotification,
+            object: window, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                MicMonitor.shared.windowVisibilityChanged(visible: true)
+            }
+        }
     }
 
     // MARK: - Permissions

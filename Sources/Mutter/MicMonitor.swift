@@ -25,6 +25,17 @@ final class MicMonitor: ObservableObject {
     /// Set by the settings view. Without it, a dictation that ends after the
     /// view closed would restart the meter invisibly in the background.
     private var isVisible = false
+    /// Set while the dashboard window is closed or minimised.
+    ///
+    /// Deliberately separate from `isVisible`. The window is created once and
+    /// retained (`isReleasedWhenClosed = false`), so closing it does **not**
+    /// tear down the SwiftUI view tree and `.onDisappear` never fires — the
+    /// meter would otherwise keep the microphone open forever, with the system
+    /// recording indicator lit and no window on screen to explain why.
+    ///
+    /// All three of `suspended`, `isVisible` and `windowHidden` can be set
+    /// independently, and each must be able to hold the microphone off alone.
+    private var windowHidden = false
     private var deviceUID: String?
     private var poll: Timer?
     private var configObserver: NSObjectProtocol?
@@ -74,6 +85,77 @@ final class MicMonitor: ObservableObject {
         stop()
     }
 
+    /// Called from AppKit when the dashboard window opens, closes or is
+    /// minimised. SwiftUI's own lifecycle cannot be trusted here — see
+    /// `windowHidden`.
+    func windowVisibilityChanged(visible: Bool) {
+        windowHidden = !visible
+        if visible {
+            start(deviceUID: deviceUID)
+        } else {
+            stop()
+        }
+    }
+
+    /// True when the microphone should be open right now. Exposed so the
+    /// self-test can assert the guard conditions without touching hardware.
+    var shouldBeRunning: Bool {
+        isVisible && !suspended && !windowHidden
+    }
+
+    // MARK: - Self test
+
+    /// Asserts the gating logic only. Never starts the engine, so it is safe to
+    /// run headless and leaves the singleton as it found it.
+    static func runSelfTest() -> Bool {
+        var passed = true
+        let mic = MicMonitor.shared
+        let restore = mic.isVisible
+
+        mic.viewDisappeared()
+        mic.windowVisibilityChanged(visible: true)
+        let cardHidden = !mic.shouldBeRunning
+
+        mic.viewAppeared(deviceUID: nil)
+        let cardShown = mic.shouldBeRunning
+
+        // The case that shipped broken: the window is retained across closes,
+        // so the card never "disappears" and only this can shut the mic off.
+        mic.windowVisibilityChanged(visible: false)
+        let windowClosed = !mic.shouldBeRunning
+
+        mic.windowVisibilityChanged(visible: true)
+        mic.suspendForRecording()
+        let recording = !mic.shouldBeRunning
+        mic.resumeAfterRecording()
+        let resumed = mic.shouldBeRunning
+
+        // A close during recording must still leave it off once recording ends.
+        mic.windowVisibilityChanged(visible: false)
+        mic.suspendForRecording()
+        mic.resumeAfterRecording()
+        let closedDuringRecording = !mic.shouldBeRunning
+
+        mic.windowVisibilityChanged(visible: true)
+        mic.viewDisappeared()
+        if restore { mic.viewAppeared(deviceUID: nil) }
+
+        for (label, ok) in [
+            ("card hidden keeps it off", cardHidden),
+            ("card shown with window open turns it on", cardShown),
+            ("closing the window turns it off even with the card shown",
+             windowClosed),
+            ("recording handover turns it off", recording),
+            ("resuming after recording turns it back on", resumed),
+            ("a window closed mid-recording stays off afterwards",
+             closedDuringRecording),
+        ] {
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): mic/\(label)")
+        }
+        return passed
+    }
+
     // MARK: - Recording handover
     //
     // Called DIRECTLY by AudioRecorder, not through NotificationCenter: an
@@ -96,7 +178,7 @@ final class MicMonitor: ObservableObject {
 
     func start(deviceUID: String?) {
         self.deviceUID = deviceUID
-        guard !running, !suspended, isVisible else { return }
+        guard !running, shouldBeRunning else { return }
         let input = engine.inputNode
         if let deviceUID, let device = AudioDevices.device(uid: deviceUID) {
             try? input.auAudioUnit.setDeviceID(device.id)

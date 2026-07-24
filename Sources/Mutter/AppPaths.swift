@@ -75,6 +75,43 @@ enum AppPaths {
         return contents.allSatisfy { $0 == ".DS_Store" }
     }
 
+    /// How the app is installed, from the point of view of whether macOS will
+    /// let its permissions survive a relaunch.
+    enum InstallLocation: Equatable {
+        /// Installed properly. Permissions persist.
+        case installed
+        /// Running from a randomised read-only path because it was launched
+        /// from a DMG or from Downloads while quarantined.
+        case translocated
+        /// Not translocated, but not in an Applications folder either — a
+        /// Downloads copy that has lost its quarantine flag, say. Permissions
+        /// survive, but only until the user moves or replaces it.
+        case looseOnDisk
+    }
+
+    /// Classifies a bundle path. Pure, so the self-test can drive it.
+    ///
+    /// **Why this exists.** macOS runs a quarantined app from a randomised
+    /// read-only mount (`/private/var/folders/.../AppTranslocation/<UUID>/d/`)
+    /// rather than where the user thinks it is. TCC records permission grants
+    /// against the path, and the UUID changes on every launch — so the user
+    /// grants Accessibility, it works once, they relaunch, and the grant is
+    /// silently gone. It presents exactly like a permissions bug, which is what
+    /// makes it so expensive to diagnose.
+    ///
+    /// Shipping an Applications symlink in the DMG is an invitation, not a
+    /// guarantee. This is the enforcement.
+    static func installLocation(of bundlePath: String) -> InstallLocation {
+        if bundlePath.contains("/AppTranslocation/") { return .translocated }
+        if bundlePath.hasPrefix("/Applications/") { return .installed }
+        // Per-user Applications folders are legitimate installs too.
+        if bundlePath.range(of: "^/Users/[^/]+/Applications/",
+                            options: .regularExpression) != nil {
+            return .installed
+        }
+        return .looseOnDisk
+    }
+
     /// Folder shared between this user's Macs, or nil when iCloud Drive is
     /// unavailable.
     ///

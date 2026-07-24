@@ -34,6 +34,15 @@ struct MutterMain {
             case "--help", "-h":
                 usageAndExit()
             default:
+                // An argument this parser has never seen must not be able to
+                // kill a GUI launch. LaunchServices, login items, `open --args`
+                // and Automator wrappers can all introduce one; exiting here
+                // makes the app vanish with status 0 and no window, which the
+                // user cannot distinguish from a crash and cannot report.
+                // Anything not spelled --like-this is treated as launch noise
+                // and ignored; a malformed --flag still gets usage, because
+                // that is a person at a terminal making a typo.
+                if isLaunchNoise(argument) { continue }
                 usageAndExit()
             }
         }
@@ -43,7 +52,9 @@ struct MutterMain {
             let formatterPassed = TextFormatter.runSelfTest()
             let learnedPassed = await LearnedStore.runSelfTest()
             let syncPassed = SyncMerge.runSelfTest()
-            exit(formatterPassed && learnedPassed && syncPassed ? 0 : 1)
+            let micPassed = MicMonitor.runSelfTest()
+            exit(formatterPassed && learnedPassed && syncPassed && micPassed
+                 ? 0 : 1)
 
         case .format(let text):
             // Same pipeline as live dictation: format, apply learned
@@ -124,6 +135,16 @@ struct MutterMain {
         case format(String)
         case transform(String)
         case selftest
+    }
+
+    /// True when an unrecognised argument looks like something the system
+    /// passed us rather than something a person typed.
+    ///
+    /// Process serial numbers (`-psn_0_12345`), file paths from a drag-onto-icon,
+    /// and `-NSFoo` style defaults overrides all arrive without a `--` prefix.
+    /// None of them should stop the app from launching.
+    static func isLaunchNoise(_ argument: String) -> Bool {
+        !argument.hasPrefix("--")
     }
 
     private static func usageAndExit() -> Never {

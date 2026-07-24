@@ -193,6 +193,46 @@ enum SyncMerge {
                       setUp: { _ in },
                       expect: { !hasFile($0, "New") })
 
+        // MARK: Install location
+        // A quarantined app launched from a DMG runs from a randomised path
+        // that changes every launch, so TCC grants evaporate between runs and
+        // present as a permissions bug. Distribution depends on catching it.
+        let locationCases: [(path: String, expected: AppPaths.InstallLocation)] = [
+            ("/Applications/Mutter.app", .installed),
+            ("/Users/konrad/Applications/Mutter.app", .installed),
+            ("/private/var/folders/l7/xyz/T/AppTranslocation/A1B2/d/Mutter.app",
+             .translocated),
+            // Translocation wins even from a path that otherwise looks installed.
+            ("/Applications/AppTranslocation/X/d/Mutter.app", .translocated),
+            ("/Users/konrad/Downloads/Mutter.app", .looseOnDisk),
+            ("/Volumes/Mutter/Mutter.app", .looseOnDisk),
+            ("/Users/konrad/projects/mutter/build/Mutter.app", .looseOnDisk),
+        ]
+        for testCase in locationCases {
+            let got = AppPaths.installLocation(of: testCase.path)
+            let ok = got == testCase.expected
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): installLocation(\(testCase.path)) -> \(got)" +
+                  (ok ? "" : " (expected \(testCase.expected))"))
+        }
+
+        // MARK: Launch-argument robustness
+        // An unknown argument must never stop a GUI launch: the app would exit
+        // with status 0 and no window, which no user can report.
+        let noiseCases: [(argument: String, isNoise: Bool)] = [
+            ("-psn_0_774763", true),          // LaunchServices, historically
+            ("/Users/konrad/dropped-file.wav", true),  // drag onto the icon
+            ("-NSDocumentRevisionsDebugMode", true),
+            ("--typo", false),                // a person at a terminal
+            ("--selftest", false),
+        ]
+        for testCase in noiseCases {
+            let got = MutterMain.isLaunchNoise(testCase.argument)
+            let ok = got == testCase.isNoise
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): isLaunchNoise(\"\(testCase.argument)\") -> \(got)")
+        }
+
         // MARK: Shared-folder rename guard
         // The shared folder is renamed by hand, so a second Mac can be running
         // a build that expects the new name before iCloud has delivered it.

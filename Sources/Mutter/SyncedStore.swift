@@ -134,6 +134,10 @@ enum SyncedStore {
     /// Merges every shared store with its iCloud copy. Silently does nothing
     /// when iCloud Drive is unavailable.
     static func syncAll() {
+        guard Settings.syncEnabled else {
+            log.info("Sync is switched off; running local-only")
+            return
+        }
         guard let remoteDirectory = AppPaths.syncedDirectory else {
             log.info("iCloud Drive unavailable; running local-only")
             return

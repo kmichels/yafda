@@ -45,6 +45,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>26.0</string>
     <key>LSUIElement</key>
     <true/>
+    <!-- Two copies running at once means two status items, two global event
+         monitors, two paste keystrokes per dictation, and two processes racing
+         on the same sync-base.json. Easy to hit with an old build in Downloads
+         alongside a new one in Applications. -->
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Mutter records your voice while you hold the dictation key so it can transcribe it on-device.</string>
     <key>NSHumanReadableCopyright</key>

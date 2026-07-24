@@ -46,7 +46,8 @@ enum Settings {
     private static let migratedKeys = [
         "hotkey", "locale", "styleDefault", "styleOverrides",
         "engine", "whisperModel", "inputDeviceUID", "voiceProfile",
-        "disambiguationEngine", "appendTrailingSpace",
+        "disambiguationEngine", "appendTrailingSpace", "syncEnabled",
+        "launchAtLogin",
     ]
 
     private static let migrationVersionKey = "defaultsMigratedVersion"
@@ -99,6 +100,38 @@ enum Settings {
 
     static var locale: Locale {
         Locale(identifier: localeIdentifier)
+    }
+
+    /// Whether learned corrections, vocabulary and snippets are shared with
+    /// this user's other Macs through iCloud Drive.
+    ///
+    /// **Off by default, deliberately.** Syncing creates a visible folder in the
+    /// user's iCloud Drive. Doing that uninvited is acceptable for the author
+    /// and presumptuous for anyone else, so it is a decision the user makes
+    /// rather than one they discover.
+    /// Anyone already syncing before it became a choice keeps syncing: a
+    /// `sync-base.json` on disk means the merge has run at least once on this
+    /// Mac. Without that grandfather clause, shipping this setting would
+    /// silently switch off a working feature for the existing user — the exact
+    /// quiet regression this codebase keeps having to guard against.
+    static var syncEnabled: Bool {
+        get {
+            if let explicit = defaults.object(forKey: "syncEnabled") as? Bool {
+                return explicit
+            }
+            return FileManager.default.fileExists(atPath: AppPaths.syncBaseURL.path)
+        }
+        set { defaults.set(newValue, forKey: "syncEnabled") }
+    }
+
+    /// Whether Mutter starts itself at login.
+    ///
+    /// Matters more than it sounds for a menu-bar app: without it, the app is
+    /// simply not running after a reboot, and with no Dock icon there is
+    /// nothing on screen to explain why the dictation key stopped working.
+    static var launchAtLogin: Bool {
+        get { defaults.bool(forKey: "launchAtLogin") }
+        set { defaults.set(newValue, forKey: "launchAtLogin") }
     }
 
     /// Whether inserted dictation ends with a space, so the cursor is ready for
