@@ -54,7 +54,7 @@ speech and language models, with an optional local Whisper engine.
 
 ```bash
 git clone <this-repo>
-cd murmur
+cd mutter
 ./scripts/make_app.sh     # builds build/Mutter.app
 open build/Mutter.app
 ```
