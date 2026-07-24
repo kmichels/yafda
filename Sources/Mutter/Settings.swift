@@ -27,7 +27,16 @@ enum Settings {
     /// Bundle ids this app has shipped under, newest legacy first. The
     /// UserDefaults domain *is* the bundle id, so every rename orphans the
     /// previous domain wholesale.
-    private static let legacySuiteNames = ["local.murmur", "local.whisperflow"]
+    ///
+    /// **Newest first.** The loop below only fills keys that are still unset, so
+    /// whichever domain is listed first wins. Getting the order wrong, or
+    /// omitting the most recent id, silently restores *older* settings rather
+    /// than resetting to defaults — which is worse, because it looks
+    /// deliberate. `local.mutter` must stay at the head of this list until
+    /// something newer replaces it.
+    private static let legacySuiteNames = [
+        "local.mutter", "local.murmur", "local.whisperflow",
+    ]
 
     /// Every key Settings owns. This list is the whole migration: a key
     /// missing from it is a setting silently reset to its default on rename.
