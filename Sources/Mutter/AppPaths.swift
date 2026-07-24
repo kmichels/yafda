@@ -81,25 +81,62 @@ enum AppPaths {
     /// A plain path under CloudDocs works because Mutter is unsandboxed and
     /// carries no entitlements; a real ubiquity container would require a paid
     /// signing identity.
+    /// Shared folder name, and the names it has had before. Unlike the local
+    /// data folder this one is *not* migrated in code — it is renamed by hand,
+    /// once, because two machines racing to move a folder in eventually-
+    /// consistent storage is unrecoverable. The legacy name survives here only
+    /// so a machine that has not yet seen the rename can recognise it and wait.
+    static let syncedDirectoryName = "Mutter"
+    static let legacySyncedDirectoryNames = ["Murmur"]
+
     static var syncedDirectory: URL? {
         let cloud = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs",
                                     isDirectory: true)
         guard FileManager.default.fileExists(atPath: cloud.path) else { return nil }
-        let directory = cloud.appendingPathComponent("Murmur", isDirectory: true)
-        let alreadyExisted = FileManager.default.fileExists(atPath: directory.path)
+        return syncedDirectory(in: cloud, name: syncedDirectoryName,
+                               legacyNames: legacySyncedDirectoryNames)
+    }
+
+    /// Resolves the shared folder inside `cloud`, or nil when syncing must sit
+    /// this launch out. Parameterised so the self-test can drive it against a
+    /// scratch directory.
+    ///
+    /// The guard that matters: if the current name is absent but a legacy name
+    /// is present, this machine is looking at a folder rename that has not
+    /// reached it yet. Creating the new folder here would leave two live
+    /// folders, and iCloud resolves that collision by inventing "Mutter 2".
+    /// Returning nil makes sync skip — the app still runs, it just does not
+    /// sync until the rename lands. Refusing to launch would be a worse bug
+    /// than the one it prevents.
+    static func syncedDirectory(in cloud: URL, name: String,
+                                legacyNames: [String]) -> URL? {
+        let manager = FileManager.default
+        let directory = cloud.appendingPathComponent(name, isDirectory: true)
+        let alreadyExisted = manager.fileExists(atPath: directory.path)
+
         if !alreadyExisted {
-            try? FileManager.default.createDirectory(
+            for legacyName in legacyNames {
+                let legacy = cloud.appendingPathComponent(legacyName, isDirectory: true)
+                guard manager.fileExists(atPath: legacy.path) else { continue }
+                log.notice("""
+                    Shared folder is still named \(legacyName, privacy: .public); \
+                    the rename to \(name, privacy: .public) has not arrived on this \
+                    Mac yet. Skipping sync this launch.
+                    """)
+                return nil
+            }
+            try? manager.createDirectory(
                 at: directory, withIntermediateDirectories: true)
         }
-        guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+        guard manager.fileExists(atPath: directory.path) else { return nil }
         if !alreadyExisted {
             syncedDirectoryWasJustCreated = true
         }
         return directory
     }
 
-    /// True when this process created the CloudDocs/Murmur folder itself this
+    /// True when this process created the CloudDocs/Mutter folder itself this
     /// launch. A just-created folder is indistinguishable from one whose iCloud
     /// listing has not materialized yet, so `.missing` inside it must not
     /// authorize seeding — the other Mac's files may simply not be visible yet.

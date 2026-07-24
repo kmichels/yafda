@@ -69,7 +69,7 @@ enum SyncMerge {
         // iCloud Drive may or may not exist on the machine running the tests, so
         // assert the contract rather than a particular answer.
         let synced = AppPaths.syncedDirectory
-        let syncedOK = synced == nil || synced?.lastPathComponent == "Murmur"
+        let syncedOK = synced == nil || synced?.lastPathComponent == "Mutter"
         if !syncedOK { passed = false }
         print("\(syncedOK ? "PASS" : "FAIL"): syncedDirectory = " +
               "\(synced?.path ?? "nil (iCloud Drive unavailable)")")
@@ -192,6 +192,56 @@ enum SyncMerge {
         migrationCase("nothing to migrate is not an error",
                       setUp: { _ in },
                       expect: { !hasFile($0, "New") })
+
+        // MARK: Shared-folder rename guard
+        // The shared folder is renamed by hand, so a second Mac can be running
+        // a build that expects the new name before iCloud has delivered it.
+        // Creating the new folder in that window leaves two live folders and
+        // iCloud resolves the collision as "Mutter 2".
+        func sharedFolderCase(_ label: String,
+                              setUp: (URL) -> Void,
+                              expect: (URL?, URL) -> Bool) {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mutter-selftest-shared-\(UUID().uuidString)",
+                                        isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: scratch, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let savedFlag = AppPaths.syncedDirectoryWasJustCreated
+            defer { AppPaths.syncedDirectoryWasJustCreated = savedFlag }
+            setUp(scratch)
+            let resolved = AppPaths.syncedDirectory(
+                in: scratch, name: "New", legacyNames: ["Old"])
+            let ok = expect(resolved, scratch)
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): sharedFolder/\(label)")
+        }
+
+        func makeDir(_ base: URL, _ name: String) {
+            try? FileManager.default.createDirectory(
+                at: base.appendingPathComponent(name, isDirectory: true),
+                withIntermediateDirectories: true)
+        }
+
+        sharedFolderCase("the current folder is used when present",
+                         setUp: { makeDir($0, "New") },
+                         expect: { resolved, _ in resolved?.lastPathComponent == "New" })
+
+        sharedFolderCase("a pending rename defers rather than making a second folder",
+                         setUp: { makeDir($0, "Old") },
+                         expect: { resolved, base in
+                             resolved == nil && !FileManager.default.fileExists(
+                                 atPath: base.appendingPathComponent("New").path) })
+
+        sharedFolderCase("first contact creates the folder and flags the seed defer",
+                         setUp: { _ in },
+                         expect: { resolved, _ in
+                             resolved?.lastPathComponent == "New"
+                                 && AppPaths.syncedDirectoryWasJustCreated })
+
+        sharedFolderCase("a completed rename ignores the leftover legacy folder",
+                         setUp: { base in makeDir(base, "New"); makeDir(base, "Old") },
+                         expect: { resolved, _ in resolved?.lastPathComponent == "New" })
 
         // MARK: Three-way merge
         // Values are plain strings; `resolve` prefers local on a real conflict.
