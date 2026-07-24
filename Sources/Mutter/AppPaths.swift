@@ -22,7 +22,7 @@ enum AppPaths {
     /// Folder shared between this user's Macs, or nil when iCloud Drive is
     /// unavailable.
     ///
-    /// A plain path under CloudDocs works because Murmur is unsandboxed and
+    /// A plain path under CloudDocs works because Mutter is unsandboxed and
     /// carries no entitlements; a real ubiquity container would require a paid
     /// signing identity.
     static var syncedDirectory: URL? {

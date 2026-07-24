@@ -22,7 +22,7 @@ struct LearnedPair: Equatable {
     var intended: String
 }
 
-/// What a transcript fix taught Murmur, and what it declined to learn.
+/// What a transcript fix taught Mutter, and what it declined to learn.
 struct LearnOutcome: Equatable {
     var learned: [LearnedPair] = []
     var skipped: [LearnedPair] = []
@@ -38,7 +38,7 @@ struct LearnOutcome: Equatable {
         }
         if !skipped.isEmpty {
             parts.append("Skipped " + Self.list(skipped.map { "“\($0.heard)”" })
-                + " — Murmur won’t rewrite \(skipped.count == 1 ? "that" : "those")"
+                + " — Mutter won’t rewrite \(skipped.count == 1 ? "that" : "those")"
                 + " automatically")
         }
         guard !parts.isEmpty else { return "Transcript updated." }
@@ -53,7 +53,7 @@ struct LearnOutcome: Equatable {
     }
 }
 
-/// Murmur's pronunciation memory. Populated by the Voice Training page and
+/// Mutter's pronunciation memory. Populated by the Voice Training page and
 /// by corrections the user makes to transcripts in History. Used two ways:
 /// 1. `apply(in:)` fixes known mishearings in every transcript.
 /// 2. `biasTerms()` feeds the user's vocabulary into the speech model
@@ -654,14 +654,14 @@ enum LearnedStore {
              "Learned “Lightrim” → “Lightroom”."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work")]),
-             "Skipped “have” — Murmur won’t rewrite that automatically."),
+             "Skipped “have” — Mutter won’t rewrite that automatically."),
             (LearnOutcome(learned: [LearnedPair(heard: "JPIG", intended: "JPEG")],
                           skipped: [LearnedPair(heard: "my", intended: "a")]),
-             "Learned “JPIG” → “JPEG”. Skipped “my” — Murmur won’t rewrite that automatically."),
+             "Learned “JPIG” → “JPEG”. Skipped “my” — Mutter won’t rewrite that automatically."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work"),
                                     LearnedPair(heard: "my", intended: "a")]),
-             "Skipped “have” and “my” — Murmur won’t rewrite those automatically."),
+             "Skipped “have” and “my” — Mutter won’t rewrite those automatically."),
             // A heavily rewritten transcript must not produce an unbounded toast.
             (LearnOutcome(learned: [], skipped: [
                 LearnedPair(heard: "my", intended: "a"),
@@ -669,7 +669,7 @@ enum LearnedStore {
                 LearnedPair(heard: "God", intended: "guide"),
                 LearnedPair(heard: "form", intended: "forum"),
              ]),
-             "Skipped “my”, “have” and 2 more — Murmur won’t rewrite those automatically."),
+             "Skipped “my”, “have” and 2 more — Mutter won’t rewrite those automatically."),
         ]
         for testCase in summaryCases {
             let got = testCase.outcome.summary
@@ -879,7 +879,7 @@ enum LearnedStore {
         // File round trip, isolated to a temp dir so the user's real store is untouched.
         do {
             let vocabTempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("murmur-selftest-vocab", isDirectory: true)
+                .appendingPathComponent("mutter-selftest-vocab", isDirectory: true)
             try? FileManager.default.removeItem(at: vocabTempDir)
             try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
             VocabularyStore.directoryOverride = vocabTempDir
@@ -900,7 +900,7 @@ enum LearnedStore {
         // real store is untouched.
         do {
             let vocabTempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("murmur-selftest-vocab", isDirectory: true)
+                .appendingPathComponent("mutter-selftest-vocab", isDirectory: true)
             try? FileManager.default.removeItem(at: vocabTempDir)
             try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
             VocabularyStore.directoryOverride = vocabTempDir
@@ -927,7 +927,7 @@ enum LearnedStore {
         // MARK: Corrupt vocabulary.json is preserved, not re-migrated
         do {
             let vocabTempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("murmur-selftest-vocab-corrupt", isDirectory: true)
+                .appendingPathComponent("mutter-selftest-vocab-corrupt", isDirectory: true)
             try? FileManager.default.removeItem(at: vocabTempDir)
             try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
             VocabularyStore.directoryOverride = vocabTempDir

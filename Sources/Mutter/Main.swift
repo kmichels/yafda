@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 @main
-struct MurmurMain {
+struct MutterMain {
     @MainActor
     static func main() async {
         Settings.migrateLegacyDefaults()
@@ -110,7 +110,7 @@ struct MurmurMain {
             app.delegate = delegate
             // Merge with the other Mac off the main thread. A coordinated read
             // can block on the iCloud daemon, and a hang before `run()` would
-            // leave Murmur bouncing in the Dock with no UI at all.
+            // leave Mutter bouncing in the Dock with no UI at all.
             DispatchQueue.global(qos: .userInitiated).async {
                 SyncedStore.syncAll()
             }
@@ -128,15 +128,15 @@ struct MurmurMain {
 
     private static func usageAndExit() -> Never {
         print("""
-        Murmur — local dictation (hold fn to talk, release to paste)
+        Mutter — local dictation (hold fn to talk, release to paste)
 
         Usage:
-          Murmur                      run as menu bar app
-          Murmur --transcribe <file>  transcribe an audio file
+          Mutter                      run as menu bar app
+          Mutter --transcribe <file>  transcribe an audio file
                                       [--locale en-US] [--engine apple|whisper]
                                       [--whisper-model base|small|large-v3-v20240930_turbo]
-          Murmur --format "<text>"    run the text formatter on a string
-          Murmur --selftest           run formatter self-tests
+          Mutter --format "<text>"    run the text formatter on a string
+          Mutter --selftest           run formatter self-tests
         """)
         exit(0)
     }

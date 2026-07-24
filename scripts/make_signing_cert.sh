@@ -2,6 +2,10 @@
 # Creates a self-signed code-signing certificate "WhisperFlow Dev" in the
 # login keychain, so rebuilds keep the same signature and macOS permission
 # grants (Accessibility) survive. Idempotent.
+#
+# The name is two renames out of date (WhisperFlow -> Murmur -> Mutter) and
+# must stay that way: the cert leaf forms half the TCC designated requirement,
+# so reissuing it under a current name would drop every permission grant.
 set -euo pipefail
 
 NAME="WhisperFlow Dev"

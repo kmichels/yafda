@@ -12,7 +12,7 @@ struct AudioInputDevice: Identifiable, Equatable {
 
 /// CoreAudio input device enumeration.
 ///
-/// Murmur previously recorded from `AVAudioEngine`'s default input, which
+/// Mutter previously recorded from `AVAudioEngine`'s default input, which
 /// follows the system setting with no indication of which device that is. On a
 /// Mac with a display microphone and a desk microphone, that silently picked
 /// the wrong one.

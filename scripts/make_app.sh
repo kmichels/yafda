@@ -1,20 +1,20 @@
 #!/bin/bash
-# Builds Murmur.app from the SwiftPM release binary.
+# Builds Mutter.app from the SwiftPM release binary.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 swift build -c release
 
-APP="build/Murmur.app"
+APP="build/Mutter.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp .build/release/Murmur "$APP/Contents/MacOS/Murmur"
+cp .build/release/Mutter "$APP/Contents/MacOS/Mutter"
 
 # App icon (generated once; rerun scripts/make_icon.swift to change it).
-if [ -f "Resources/Murmur.icns" ]; then
-    cp Resources/Murmur.icns "$APP/Contents/Resources/Murmur.icns"
+if [ -f "Resources/Mutter.icns" ]; then
+    cp Resources/Mutter.icns "$APP/Contents/Resources/Mutter.icns"
 fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -23,14 +23,18 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Deliberately still local.murmur while the app is named Mutter. The
+         bundle id is the key for every TCC grant (Accessibility, Microphone,
+         iCloud Drive); changing it costs a re-grant. Renamed separately in
+         phase 2 of .planning/design/rename-to-mutter.md, not here. -->
     <key>CFBundleIdentifier</key>
     <string>local.murmur</string>
     <key>CFBundleName</key>
-    <string>Murmur</string>
+    <string>Mutter</string>
     <key>CFBundleExecutable</key>
-    <string>Murmur</string>
+    <string>Mutter</string>
     <key>CFBundleIconFile</key>
-    <string>Murmur</string>
+    <string>Mutter</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -42,7 +46,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Murmur records your voice while you hold the dictation key so it can transcribe it on-device.</string>
+    <string>Mutter records your voice while you hold the dictation key so it can transcribe it on-device.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Local build — no data leaves this Mac.</string>
 </dict>
@@ -51,6 +55,11 @@ PLIST
 
 # Prefer the stable local identity (keeps macOS permission grants valid
 # across rebuilds); fall back to ad-hoc.
+#
+# The identity is still called "WhisperFlow Dev" two renames later. Leave it.
+# The name is cosmetic, but the certificate leaf is half of the TCC designated
+# requirement, so reissuing it under a nicer name invalidates the signature and
+# drops every permission grant. Stale name, load-bearing cert.
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "WhisperFlow Dev"; then
     codesign --force --sign "WhisperFlow Dev" "$APP"
     echo "Signed with 'WhisperFlow Dev'."

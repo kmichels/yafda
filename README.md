@@ -1,8 +1,11 @@
-# Murmur 🎙️
+# Mutter 🎙️
 
 > **This is a fork** of [janisbelozerovs-dev/murmur](https://github.com/janisbelozerovs-dev/murmur)
 > by Janis Belozerovs, MIT licensed, with thanks. It follows its own roadmap and is not
 > affiliated with upstream. Fixes that apply to both are sent back as pull requests.
+>
+> Named **Murmur** until July 2026, after upstream. Renamed to **Mutter** to
+> stop the fork and its parent sharing a name.
 
 **Private, unlimited voice dictation for macOS — 100% on-device.**
 
@@ -10,9 +13,9 @@ Hold `fn`, speak, release — clean text appears at your cursor in any app.
 No cloud, no subscription, no word limits. Your audio and transcripts never
 leave your Mac.
 
-![Murmur dashboard](Resources/screenshot.png)
+![Mutter dashboard](Resources/screenshot.png)
 
-Murmur is an open-source, fully local take on the modern AI dictation app
+Mutter is an open-source, fully local take on the modern AI dictation app
 (in the spirit of Wispr Flow), built natively in Swift on Apple's on-device
 speech and language models, with an optional local Whisper engine.
 
@@ -52,8 +55,8 @@ speech and language models, with an optional local Whisper engine.
 ```bash
 git clone <this-repo>
 cd murmur
-./scripts/make_app.sh     # builds build/Murmur.app
-open build/Murmur.app
+./scripts/make_app.sh     # builds build/Mutter.app
+open build/Mutter.app
 ```
 
 Optional: run `./scripts/make_signing_cert.sh` once to create a local
@@ -66,26 +69,26 @@ re-grant Accessibility after each rebuild.
 1. **Microphone** — allow when prompted on first dictation.
 2. **Accessibility** — allow when prompted (needed for the global hotkey and
    for pasting). If the app still shows it as missing, use *Settings →
-   Reset Grant & Relaunch* inside Murmur.
+   Reset Grant & Relaunch* inside Mutter.
 
 ## CLI test modes
 
 ```bash
-.build/debug/Murmur --selftest                          # formatter + learning tests
-.build/debug/Murmur --transcribe audio.wav              # Apple engine
-.build/debug/Murmur --transcribe audio.wav --engine whisper
-.build/debug/Murmur --format "um hello new line hi"     # cleanup pipeline only
-.build/debug/Murmur --transform "fix this grammer pls"  # on-device LLM polish
+.build/debug/Mutter --selftest                          # formatter + learning tests
+.build/debug/Mutter --transcribe audio.wav              # Apple engine
+.build/debug/Mutter --transcribe audio.wav --engine whisper
+.build/debug/Mutter --format "um hello new line hi"     # cleanup pipeline only
+.build/debug/Mutter --transform "fix this grammer pls"  # on-device LLM polish
 ```
 
 ## Privacy
 
 Everything runs on this Mac: recognition (Apple SpeechAnalyzer or local
 Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
-Profile analysis. Murmur makes no network requests except the one-time
+Profile analysis. Mutter makes no network requests except the one-time
 model downloads by macOS itself (Apple speech assets) and, if you opt into
 the Whisper engine, the model fetch from Hugging Face. Dictation data is
-stored only in `~/Library/Application Support/Murmur/`.
+stored only in `~/Library/Application Support/Mutter/`.
 
 ## Architecture
 

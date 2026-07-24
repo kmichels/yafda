@@ -58,12 +58,12 @@ final class AudioRecorder {
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(
-                domain: "Murmur", code: 1,
+                domain: "Mutter", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "No microphone input available"])
         }
 
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("murmur-\(UUID().uuidString).caf")
+            .appendingPathComponent("mutter-\(UUID().uuidString).caf")
         let audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
 
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in

@@ -197,7 +197,7 @@ enum SyncMerge {
         // ABORT the sync (protecting the remote), not read as mass deletion.
         do {
             let syncTmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("murmur-selftest-synccomp", isDirectory: true)
+                .appendingPathComponent("mutter-selftest-synccomp", isDirectory: true)
             try? FileManager.default.removeItem(at: syncTmp)
             let localDir = syncTmp.appendingPathComponent("local", isDirectory: true)
             let remoteDir = syncTmp.appendingPathComponent("remote", isDirectory: true)
@@ -287,7 +287,7 @@ enum SyncMerge {
         // against temp dirs with the flag forced.
         do {
             let seedTmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("murmur-selftest-seedguard", isDirectory: true)
+                .appendingPathComponent("mutter-selftest-seedguard", isDirectory: true)
             try? FileManager.default.removeItem(at: seedTmp)
             let localDir = seedTmp.appendingPathComponent("local", isDirectory: true)
             let remoteDir = seedTmp.appendingPathComponent("remote", isDirectory: true)

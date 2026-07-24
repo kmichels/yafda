@@ -2,7 +2,7 @@ import AVFAudio
 import Foundation
 import WhisperKit
 
-/// Murmur's optional "Precise" recognition engine: OpenAI's Whisper model
+/// Mutter's optional "Precise" recognition engine: OpenAI's Whisper model
 /// running locally via WhisperKit (CoreML on the Neural Engine). Slower to
 /// warm up than Apple's engine but stronger on accents and jargon, and it
 /// supports vocabulary biasing through the decoder prompt — the user's

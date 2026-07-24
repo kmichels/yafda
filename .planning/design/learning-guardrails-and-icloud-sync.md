@@ -1,3 +1,7 @@
+> **Historical document.** Written while the app was called Murmur; it was renamed to
+> Mutter in July 2026. Names here are left as written on purpose — see
+> `.planning/design/rename-to-mutter.md`.
+
 # Learning Guardrails + iCloud Sync - Design Document
 
 **Status**: Draft

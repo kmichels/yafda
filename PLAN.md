@@ -1,4 +1,4 @@
-# Murmur — Local Wispr Flow Rebuild
+# Mutter — Local Wispr Flow Rebuild
 
 A fully local macOS dictation app that reproduces Wispr Flow's core loop:
 **hold a key → speak → release → clean text appears at your cursor in any app.**
@@ -27,7 +27,7 @@ no network. Uses Apple's on-device speech stack.
 | Audio capture | `AVAudioEngine` input tap → temp `.caf` file. Needs Microphone permission. |
 | Transcription | `SpeechAnalyzer` + `SpeechTranscriber` (macOS 26, fully on-device; model asset auto-downloaded by macOS once) |
 | Text cleanup | Rule-based formatter: strip fillers (um, uh, you know), spoken commands ("new line", "new paragraph"), sentence capitalization, terminal punctuation, personal dictionary substitutions |
-| Dictionary | `~/Library/Application Support/Murmur/dictionary.json` — `{ "spoken": "replacement" }` |
+| Dictionary | `~/Library/Application Support/Mutter/dictionary.json` — `{ "spoken": "replacement" }` |
 | Insertion | Save clipboard → put transcript on clipboard → synthesize ⌘V via `CGEvent` → restore clipboard |
 | History | Last 50 transcripts persisted to `history.json`; menu shows recent, click to copy |
 | Feedback | Sounds on start/stop, menu bar icon state |
@@ -39,7 +39,7 @@ Whisper Flow/
 ├── PLAN.md
 ├── README.md
 ├── Package.swift              # SwiftPM executable target
-├── Sources/Murmur/
+├── Sources/Mutter/
 │   ├── main.swift             # entry: CLI modes + app launch
 │   ├── AppDelegate.swift      # status item, wiring, permissions
 │   ├── HotkeyMonitor.swift    # fn / right-option hold + double-tap detection
@@ -49,13 +49,13 @@ Whisper Flow/
 │   ├── TextInserter.swift     # clipboard + ⌘V injection
 │   └── HistoryStore.swift     # persisted transcript history
 └── scripts/
-    └── make_app.sh            # builds Murmur.app bundle + ad-hoc codesign
+    └── make_app.sh            # builds Mutter.app bundle + ad-hoc codesign
 ```
 
 ## CLI test modes (headless verification)
 
-- `Murmur --transcribe <audiofile>` — transcribe a file, print raw + formatted text
-- `Murmur --selftest` — run TextFormatter unit checks
+- `Mutter --transcribe <audiofile>` — transcribe a file, print raw + formatted text
+- `Mutter --selftest` — run TextFormatter unit checks
 - (default, no args) — run as menu bar app
 
 ## Build & test sequence
@@ -64,7 +64,7 @@ Whisper Flow/
 2. `--selftest` formatter checks pass.
 3. `say -o sample.aiff "..."` → `--transcribe sample.aiff` returns correct text
    (verifies the full on-device ASR path without a microphone).
-4. `scripts/make_app.sh` produces `Murmur.app`.
+4. `scripts/make_app.sh` produces `Mutter.app`.
 5. Launch app; user grants **Microphone** + **Accessibility**; hold fn, speak,
    release → text pastes into focused app.
 
@@ -72,7 +72,7 @@ Whisper Flow/
 
 1. **Microphone** — prompted automatically on first recording.
 2. **Accessibility** — System Settings → Privacy & Security → Accessibility →
-   add Murmur.app (required for the global hotkey and for ⌘V injection).
+   add Mutter.app (required for the global hotkey and for ⌘V injection).
 
 ## Out of scope for v1 (future)
 

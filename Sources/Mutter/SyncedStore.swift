@@ -41,7 +41,7 @@ struct SyncBase: Codable, Equatable {
 /// merge is order-independent so simultaneous use degrades to a conflict on
 /// individual entries rather than a lost file.
 enum SyncedStore {
-    private static let log = Logger(subsystem: "local.murmur", category: "sync")
+    private static let log = Logger(subsystem: "local.mutter", category: "sync")
 
     // MARK: - Keying
 

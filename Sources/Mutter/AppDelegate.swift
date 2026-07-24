@@ -102,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if window == nil {
             let hosting = NSHostingController(rootView: MainView(app: self))
             let newWindow = NSWindow(contentViewController: hosting)
-            newWindow.title = "Murmur"
+            newWindow.title = "Mutter"
             newWindow.styleMask = [
                 .titled, .closable, .miniaturizable, .resizable, .fullSizeContentView,
             ]
@@ -386,14 +386,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         case .processing: symbol = "hourglass"
         }
         statusItem.button?.image = NSImage(
-            systemSymbolName: symbol, accessibilityDescription: "Murmur")
+            systemSymbolName: symbol, accessibilityDescription: "Mutter")
     }
 
     private func rebuildMenu() {
         let menu = NSMenu()
 
         let openItem = NSMenuItem(
-            title: "Open Murmur…", action: #selector(openMainWindow),
+            title: "Open Mutter…", action: #selector(openMainWindow),
             keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
@@ -428,7 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         menu.addItem(.separator())
         let quit = NSMenuItem(
-            title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)),
+            title: "Quit Mutter", action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q")
         menu.addItem(quit)
 
