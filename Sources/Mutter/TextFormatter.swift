@@ -126,6 +126,28 @@ struct TextFormatter {
         return text
     }
 
+    // MARK: - Insertion
+
+    /// The text as it should land at the cursor.
+    ///
+    /// `format()` trims trailing whitespace, which is right for everything that
+    /// gets *stored* — history, correction diffing, Voice Profile word counts —
+    /// but wrong for what gets *pasted*: the cursor ends flush against the full
+    /// stop, so dictating twice in a row produces "…done.Next sentence…".
+    ///
+    /// Kept separate from `format()` precisely so the space never reaches the
+    /// stored copy. Trailing whitespace in the learning corpus is how junk
+    /// correction rules get taught.
+    ///
+    /// Appends nothing when the text is empty (never paste a lone space) or
+    /// already ends in whitespace — including the newline left by "new
+    /// paragraph", where the cursor is already at the start of a fresh line.
+    static func forInsertion(_ text: String, appendTrailingSpace: Bool) -> String {
+        guard appendTrailingSpace, !text.isEmpty else { return text }
+        guard let last = text.last, !last.isWhitespace else { return text }
+        return text + " "
+    }
+
     // MARK: - Self test
 
     static func runSelfTest() -> Bool {
@@ -150,6 +172,35 @@ struct TextFormatter {
             print("\(ok ? "PASS" : "FAIL"): \"\(testCase.input)\" -> \"\(got)\"" +
                   (ok ? "" : " (expected \"\(testCase.expected)\")"))
         }
+
+        // MARK: Trailing space for insertion
+        // format() trims trailing whitespace, so without this the cursor lands
+        // hard against the full stop and consecutive dictations run together.
+        let insertionCases: [(text: String, append: Bool, expected: String)] = [
+            ("Hello world.", true, "Hello world. "),
+            ("no punctuation", true, "no punctuation "),
+            // Never double up - the style rewrite and snippet expansion can
+            // both hand back trailing whitespace.
+            ("already spaced ", true, "already spaced "),
+            // "new paragraph" leaves the cursor at the start of a fresh line,
+            // where a leading space would be wrong.
+            ("Intro\n\nDetails\n", true, "Intro\n\nDetails\n"),
+            // Empty in, empty out - never paste a lone space.
+            ("", true, ""),
+            ("Hello world.", false, "Hello world."),
+            ("", false, ""),
+            // Interior whitespace is not this function's business.
+            ("First\nSecond.", true, "First\nSecond. "),
+        ]
+        for testCase in insertionCases {
+            let got = forInsertion(testCase.text, appendTrailingSpace: testCase.append)
+            let ok = got == testCase.expected
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): forInsertion(\"\(testCase.text)\", " +
+                  "append: \(testCase.append)) -> \"\(got)\"" +
+                  (ok ? "" : " (expected \"\(testCase.expected)\")"))
+        }
+
         return passed
     }
 }

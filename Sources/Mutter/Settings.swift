@@ -37,7 +37,7 @@ enum Settings {
     private static let migratedKeys = [
         "hotkey", "locale", "styleDefault", "styleOverrides",
         "engine", "whisperModel", "inputDeviceUID", "voiceProfile",
-        "disambiguationEngine",
+        "disambiguationEngine", "appendTrailingSpace",
     ]
 
     private static let migrationVersionKey = "defaultsMigratedVersion"
@@ -90,6 +90,19 @@ enum Settings {
 
     static var locale: Locale {
         Locale(identifier: localeIdentifier)
+    }
+
+    /// Whether inserted dictation ends with a space, so the cursor is ready for
+    /// the next sentence. On unless deliberately turned off.
+    ///
+    /// Note the `object(forKey:)` check: `bool(forKey:)` returns false for a key
+    /// that has never been written, which would ship this off for everyone.
+    static var appendTrailingSpace: Bool {
+        get {
+            guard defaults.object(forKey: "appendTrailingSpace") != nil else { return true }
+            return defaults.bool(forKey: "appendTrailingSpace")
+        }
+        set { defaults.set(newValue, forKey: "appendTrailingSpace") }
     }
 
     /// UID of the microphone to record from, or nil to follow the system

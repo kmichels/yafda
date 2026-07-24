@@ -344,17 +344,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     transformStatus = nil
                 }
                 if !formatted.isEmpty {
+                    // History, correction diffing and the Voice Profile all read
+                    // this, so it stays trimmed. Only the pasted copy gets the
+                    // trailing space.
                     history.add(formatted, duration: duration)
                     entries = history.entries
                     refreshVoiceProfileIfDue()
+                    let forCursor = TextFormatter.forInsertion(
+                        formatted,
+                        appendTrailingSpace: Settings.appendTrailingSpace)
                     if AXIsProcessTrusted() {
-                        TextInserter.insert(formatted)
+                        TextInserter.insert(forCursor)
                     } else {
                         // Can't synthesize ⌘V without Accessibility — never
                         // fail silently: leave the transcript on the clipboard.
                         let pasteboard = NSPasteboard.general
                         pasteboard.clearContents()
-                        pasteboard.setString(formatted, forType: .string)
+                        pasteboard.setString(forCursor, forType: .string)
                         lastError = "Accessibility isn't active for this build, " +
                             "so the text was copied to your clipboard instead — " +
                             "press ⌘V to paste it. Fix this in Settings."

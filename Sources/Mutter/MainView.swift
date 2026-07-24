@@ -1038,6 +1038,22 @@ struct SettingsPage: View {
                 }
                 Divider()
                 HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Space after each dictation")
+                        Text("Leaves the cursor one space past the last " +
+                             "character, so the next sentence doesn't run " +
+                             "into this one.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { Settings.appendTrailingSpace },
+                        set: { Settings.appendTrailingSpace = $0 }))
+                        .labelsHidden()
+                }
+                Divider()
+                HStack {
                     Text("Language")
                     Spacer()
                     Picker("", selection: Binding(

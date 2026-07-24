@@ -1013,6 +1013,25 @@ enum LearnedStore {
         if !engineOK { passed = false }
         print("\(engineOK ? "PASS" : "FAIL"): disambiguationEngine stores and restores")
 
+        // The trailing space is on unless deliberately turned off, so an unset
+        // key must read as true. UserDefaults.bool(forKey:) returns false for a
+        // key that was never written, which would ship the feature off for
+        // everyone; this guards that specific trap.
+        let savedSpace = UserDefaults.standard.object(forKey: "appendTrailingSpace")
+        UserDefaults.standard.removeObject(forKey: "appendTrailingSpace")
+        let defaultsOn = Settings.appendTrailingSpace
+        Settings.appendTrailingSpace = false
+        let storesOff = Settings.appendTrailingSpace == false
+        if let savedSpace {
+            UserDefaults.standard.set(savedSpace, forKey: "appendTrailingSpace")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "appendTrailingSpace")
+        }
+        let spaceOK = defaultsOn && storesOff
+        if !spaceOK { passed = false }
+        print("\(spaceOK ? "PASS" : "FAIL"): appendTrailingSpace defaults on and " +
+              "stores an explicit off")
+
         return passed
     }
 }
