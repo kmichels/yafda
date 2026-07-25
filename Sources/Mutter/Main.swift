@@ -117,7 +117,11 @@ struct MutterMain {
 
         case .app:
             let app = NSApplication.shared
-            app.setActivationPolicy(.accessory)
+            // Regular, not accessory: Cmd-Tab must reach the dashboard
+            // (removing LSUIElement from the plist is not enough - this call
+            // overrides it). Explicit rather than plist-defaulted so the bare
+            // .build binary a dev launches gets UI capability too.
+            app.setActivationPolicy(.regular)
             let delegate = AppDelegate()
             app.delegate = delegate
             // Merge with the other Mac off the main thread. A coordinated read

@@ -29,9 +29,14 @@ Trade-off accepted: a permanent Dock icon, same as WhisperFlow.
 
 Files: `scripts/make_app.sh` (remove the LSUIElement key from the Info.plist
 template, keep a comment explaining why it must stay absent),
+`Sources/Mutter/Main.swift` (the `.app` startup path calls
+`setActivationPolicy(.accessory)`, which overrides the plist - it becomes
+`.regular`, kept explicit so the bare dev binary gets UI capability too),
 `Sources/Mutter/AppDelegate.swift` (`applicationDidBecomeActive`: if the
 window is miniaturized, deminiaturize; else if no visible window,
-`showMainWindow()`; idempotent when the window is already frontmost).
+`showMainWindow()`; idempotent when the window is already frontmost),
+`Sources/Mutter/LoginItem.swift` (doc-comment only: its rationale text
+described the LSUIElement menu-bar behavior this change removes).
 
 The existing `applicationShouldHandleReopen` keeps handling Dock-icon
 clicks; the mic-gate window observers (MicMonitor) already handle reopen and
@@ -57,3 +62,14 @@ green: `swift build && .build/debug/Mutter --selftest`.
   NSApp.activate, where the visible-window check makes it idempotent).
 - Suite 172 PASS, 0 FAIL after the change. Cmd-Tab behavior itself is only
   observable in the running app; verified by dogfooding on the laptop.
+
+### 2026-07-25 - Round 2: the plist was only half the mechanism
+
+Field-tested on mac-mini-pro: the rebuilt app (plist correctly missing
+LSUIElement) still did not appear in Cmd-Tab or the Dock. Root cause of the
+incomplete fix: `Main.swift`'s `.app` startup path calls
+`setActivationPolicy(.accessory)`, which overrides the plist at runtime; the
+first-round investigation checked the plist and AppDelegate but never
+searched the code for a policy call. Changed to `.regular`, kept explicit so
+the bare `.build` dev binary gets UI capability too. LoginItem's doc comment
+still described the LSUIElement behavior and was rewritten.

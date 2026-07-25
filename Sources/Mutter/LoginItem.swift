@@ -4,10 +4,11 @@ import os
 
 /// Registers Mutter to start at login.
 ///
-/// A menu-bar app with `LSUIElement` has no Dock icon and no window when it is
-/// not running, so after a reboot the dictation key simply does nothing and
-/// there is nothing on screen to explain why. That failure is more likely to
-/// strand a new user than the Accessibility grant everyone worries about.
+/// Without this, after a reboot the dictation key simply does nothing until
+/// the user remembers to launch the app - a failure more likely to strand a
+/// new user than the Accessibility grant everyone worries about. (The app is
+/// a regular app now, so at least an unlaunched Mutter is visibly absent from
+/// the Dock rather than indistinguishable from a broken one.)
 enum LoginItem {
     private static let log = Logger(subsystem: "local.mutter", category: "LoginItem")
 
