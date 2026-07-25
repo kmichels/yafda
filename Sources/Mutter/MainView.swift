@@ -1779,10 +1779,8 @@ struct TrainingPage: View {
                             }
                             Spacer()
                             Button {
-                                var data = LearnedStore.load()
-                                data.corrections.removeAll { $0.id == correction.id }
-                                LearnedStore.save(data)
-                                learned = data
+                                LearnedStore.removeCorrection(id: correction.id)
+                                learned = LearnedStore.load()
                             } label: {
                                 Image(systemName: "trash")
                             }

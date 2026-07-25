@@ -38,12 +38,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Extra status line shown in the top bar while a transform runs.
     @Published var transformStatus: String?
 
+    /// Hourly sync backstop; retained, or the repeating `Timer` invalidates.
+    /// Not `private`: wired from the `AppDelegate+Sync` extension.
+    var hourlySyncTimer: Timer?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         entries = history.entries
         setUpStatusItem()
         refreshPermissions(promptAccessibility: true)
         wireHotkey()
         hotkeyMonitor.startMonitoring()
+        setUpSyncTriggers()
         transformManager.onStatus = { [weak self] status in
             self?.transformStatus = status
         }
@@ -100,12 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Mutter with the dashboard closed lands on an app with nothing on
     /// screen. (Dock clicks arrive via applicationShouldHandleReopen instead,
     /// which macOS does not send for a switcher activation.)
+    ///
+    /// Also a sync trigger: switching Macs via Cmd-Tab is exactly the moment
+    /// that matters for picking up the other Mac's changes. Rate-limited so
+    /// repeated Cmd-Tabbing does not turn into a sync storm.
     func applicationDidBecomeActive(_ notification: Notification) {
         if let window, window.isMiniaturized {
             window.deminiaturize(nil)
         } else if window?.isVisible != true {
             showMainWindow()
         }
+        SyncScheduler.triggerRateLimited(reason: "activate")
     }
 
     // MARK: - Main window

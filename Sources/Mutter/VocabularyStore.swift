@@ -58,41 +58,54 @@ enum VocabularyStore {
 
     /// Loads entries, migrating a legacy `dictionary.json` on first use. A
     /// corrupt file is preserved and never overwritten by re-migration.
+    ///
+    /// The whole method runs as one `StoreOwner.sync` block, same rationale
+    /// as `LearnedStore.add` - the migration branch's own load-modify-save
+    /// (double-checked read, then `save`) must not interleave with a sync
+    /// cycle either. `migrationLock` still guards the narrower case of two
+    /// threads racing the migration decision itself; it is now uncontended
+    /// (StoreOwner already serializes the whole call) but harmless to keep.
     static func load() -> [VocabularyEntry] {
-        switch readState() {
-        case .decoded(let entries):
-            return entries
-        case .corrupt:
-            preserveCorruptFile()
-            return []
-        case .missing:
-            // No vocabulary.json yet: migrate under a lock, double-checking
-            // inside it so a concurrent caller that just migrated wins and we
-            // don't write twice.
-            migrationLock.lock()
-            defer { migrationLock.unlock() }
+        StoreOwner.sync {
             switch readState() {
-            case .decoded(let entries): return entries
-            case .corrupt: preserveCorruptFile(); return []
+            case .decoded(let entries):
+                return entries
+            case .corrupt:
+                preserveCorruptFile()
+                return []
             case .missing:
-                // Migrate the legacy dictionary if present, then always write
-                // the file so this branch runs exactly once (even with
-                // nothing to migrate).
-                let migrated = migrate(from: TextFormatter.loadDictionary())
-                save(migrated)
-                return migrated
+                migrationLock.lock()
+                defer { migrationLock.unlock() }
+                switch readState() {
+                case .decoded(let entries): return entries
+                case .corrupt: preserveCorruptFile(); return []
+                case .missing:
+                    // Migrate the legacy dictionary if present, then always
+                    // write the file so this branch runs exactly once (even
+                    // with nothing to migrate).
+                    let migrated = migrate(from: TextFormatter.loadDictionary())
+                    save(migrated)
+                    return migrated
+                }
             }
         }
     }
 
+    /// - Note: skips the after-write debounce trigger during a sync cycle's
+    ///   own write-back - see `LearnedStore.save`.
     @discardableResult
     static func save(_ entries: [VocabularyEntry]) -> Bool {
-        guard let data = try? JSONEncoder().encode(entries) else { return false }
-        do {
-            try data.write(to: fileURL, options: .atomic)
-            return true
-        } catch {
-            return false
+        StoreOwner.sync {
+            guard let data = try? JSONEncoder().encode(entries) else { return false }
+            do {
+                try data.write(to: fileURL, options: .atomic)
+                if !StoreOwner.isRunningSyncCycle {
+                    SyncScheduler.triggerDebounced(reason: "vocabulary.json write")
+                }
+                return true
+            } catch {
+                return false
+            }
         }
     }
 

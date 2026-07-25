@@ -11,25 +11,40 @@ struct Snippet: Codable, Identifiable, Equatable {
 /// Voice shortcuts: saying a trigger phrase mid-dictation inserts the saved
 /// text block — like Wispr Flow's Snippets.
 enum SnippetStore {
+    /// Tests point this at a temp directory so self-tests (including the
+    /// serialization self-test in `StoreOwner`) never touch the user's real
+    /// snippets.json. nil in normal operation.
+    static var directoryOverride: URL?
+
     static var fileURL: URL {
-        AppPaths.supportDirectory.appendingPathComponent("snippets.json")
+        (directoryOverride ?? AppPaths.supportDirectory)
+            .appendingPathComponent("snippets.json")
     }
 
     static func load() -> [Snippet] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let snippets = try? JSONDecoder().decode([Snippet].self, from: data)
-        else { return [] }
-        return snippets
+        StoreOwner.sync {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let snippets = try? JSONDecoder().decode([Snippet].self, from: data)
+            else { return [] }
+            return snippets
+        }
     }
 
+    /// - Note: skips the after-write debounce trigger during a sync cycle's
+    ///   own write-back - see `LearnedStore.save`.
     @discardableResult
     static func save(_ snippets: [Snippet]) -> Bool {
-        guard let data = try? JSONEncoder().encode(snippets) else { return false }
-        do {
-            try data.write(to: fileURL, options: .atomic)
-            return true
-        } catch {
-            return false
+        StoreOwner.sync {
+            guard let data = try? JSONEncoder().encode(snippets) else { return false }
+            do {
+                try data.write(to: fileURL, options: .atomic)
+                if !StoreOwner.isRunningSyncCycle {
+                    SyncScheduler.triggerDebounced(reason: "snippets.json write")
+                }
+                return true
+            } catch {
+                return false
+            }
         }
     }
 
