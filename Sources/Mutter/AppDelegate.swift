@@ -43,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var hourlySyncTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before anything touches the shared stores or registers monitors: a
+        // dev build and an installed release build are different bundle ids
+        // sharing one data folder, and only one may run (release-hardening.md).
+        InstanceGuard.enforceAtLaunch()
         entries = history.entries
         setUpStatusItem()
         refreshPermissions(promptAccessibility: true)

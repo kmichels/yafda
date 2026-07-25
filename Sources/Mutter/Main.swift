@@ -56,8 +56,11 @@ struct MutterMain {
             let historyPassed = HistoryStore.runSelfTest()
             let storeOwnerPassed = StoreOwner.runSelfTest()
             let schedulerPassed = SyncScheduler.runSelfTest()
+            let snippetPassed = SnippetStore.runSelfTest()
+            let instanceGuardPassed = InstanceGuard.runSelfTest()
             exit(formatterPassed && learnedPassed && syncPassed && micPassed
-                 && historyPassed && storeOwnerPassed && schedulerPassed ? 0 : 1)
+                 && historyPassed && storeOwnerPassed && schedulerPassed
+                 && snippetPassed && instanceGuardPassed ? 0 : 1)
 
         case .format(let text):
             // Same pipeline as live dictation: format, apply learned

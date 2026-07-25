@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct LearnedCorrection: Codable, Identifiable, Equatable {
     var id = UUID()
@@ -69,6 +70,8 @@ struct LearnOutcome: Equatable {
 /// 2. `biasTerms()` feeds the user's vocabulary into the speech model
 ///    before recognition (AnalysisContext contextual strings).
 enum LearnedStore {
+    private static let log = Logger(subsystem: "local.mutter", category: "LearnedStore")
+
     /// Tests point this at a temp directory; nil in normal operation.
     static var directoryOverride: URL?
     static var fileURL: URL {
@@ -82,11 +85,30 @@ enum LearnedStore {
 
     static func load() -> LearnedData {
         StoreOwner.sync {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return LearnedData()   // fresh start, nothing to preserve
+            }
             guard let data = try? Data(contentsOf: fileURL),
                   let learned = try? JSONDecoder().decode(LearnedData.self, from: data)
-            else { return LearnedData() }
+            else {
+                // Dev and release builds share this file: an undecodable
+                // store must never present as fresh-and-writable, or the
+                // next save wipes the real data (release-hardening.md).
+                preserveCorruptFile()
+                return LearnedData()
+            }
             return learned
         }
+    }
+
+    /// Moves an unreadable learned.json aside as `learned.json.corrupt` (for
+    /// manual recovery) so it is never overwritten by a later save. Mirrors
+    /// `VocabularyStore.preserveCorruptFile`.
+    private static func preserveCorruptFile() {
+        let backup = fileURL.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: backup)
+        try? FileManager.default.moveItem(at: fileURL, to: backup)
+        log.error("learned.json was unreadable; moved to learned.json.corrupt and started empty")
     }
 
     /// - Note: skips the after-write debounce trigger when called as part of
@@ -1136,6 +1158,48 @@ enum LearnedStore {
             if !diffOK { passed = false }
             print("\(diffOK ? "PASS" : "FAIL"): learn() refuses a taught heard word end to " +
                   "end, outcome = \(diffOutcome)")
+        }
+
+        // MARK: Corrupt learned.json is preserved, not silently overwritten
+        // Dev and release builds share this file (release-hardening.md): a
+        // schema-divergent build that decodes nothing must never present as
+        // a fresh store whose next save wipes the real one. Mirrors the
+        // VocabularyStore idiom.
+        do {
+            let corruptTmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mutter-selftest-corrupt-\(UUID().uuidString)",
+                                        isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: corruptTmp, withIntermediateDirectories: true)
+            LearnedStore.directoryOverride = corruptTmp
+            defer {
+                LearnedStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: corruptTmp)
+            }
+
+            let corruptBackup = LearnedStore.fileURL.appendingPathExtension("corrupt")
+            let garbage = Data("not json {".utf8)
+            try? garbage.write(to: LearnedStore.fileURL)
+            let loaded = LearnedStore.load()
+            let preserved = (try? Data(contentsOf: corruptBackup)) == garbage
+            LearnedStore.addTerm("after-corruption")
+            let backupUntouched = (try? Data(contentsOf: corruptBackup)) == garbage
+            let corruptOK = loaded.corrections.isEmpty && preserved && backupUntouched
+            if !corruptOK { passed = false }
+            print("\(corruptOK ? "PASS" : "FAIL"): corrupt learned.json -> empty load, " +
+                  "original preserved as .corrupt (\(preserved)), " +
+                  "survives a later save (\(backupUntouched))")
+
+            // A missing file is a fresh start, not corruption: no backup.
+            try? FileManager.default.removeItem(at: LearnedStore.fileURL)
+            try? FileManager.default.removeItem(at: corruptBackup)
+            let freshLoad = LearnedStore.load()
+            let noSpuriousBackup = !FileManager.default.fileExists(atPath: corruptBackup.path)
+            let missingOK = freshLoad.corrections.isEmpty && freshLoad.terms.isEmpty
+                && noSpuriousBackup
+            if !missingOK { passed = false }
+            print("\(missingOK ? "PASS" : "FAIL"): missing learned.json loads empty " +
+                  "with no .corrupt created")
         }
 
         // MARK: Audio device enumeration
