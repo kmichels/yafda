@@ -14,3 +14,6 @@ DerivedData/
 *.p12
 *.pem
 *.cer
+
+# Release artifacts
+dist/
