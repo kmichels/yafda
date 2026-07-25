@@ -73,4 +73,36 @@ This feature IS the observability. No extra logging.
 
 ## Implementation Notes (Living Section)
 
-(fill in during implementation)
+### 2026-07-25 - Implemented as designed
+
+- `LearnedStore.applyReportingMatches(in:using:)` holds the single-pass walk;
+  `apply(in:using:)` is now a one-line wrapper (`applyReportingMatches(...).text`).
+  Matches are keyed by rule `id` and reported in first-fired order, counting
+  every occurrence per rule. The existing `apply/...` self-tests (locking
+  output byte-for-byte) pass unchanged, confirming the wrapper is behavior-
+  preserving.
+- `HistoryEntry.appliedCorrections: [AppliedCorrection]? = nil` uses Swift's
+  synthesized `Codable` (no custom `CodingKeys`) - an `Optional` stored
+  property is decoded with `decodeIfPresent` automatically, so a legacy
+  history.json with no key for it decodes to `nil` with no migration code.
+  `HistoryStore.runSelfTest()` exercises this purely via
+  `JSONEncoder`/`JSONDecoder` on `HistoryEntry` in memory - no file I/O, so
+  no temp-directory scaffolding was needed for it.
+- Confirmed `history.json` is not synced: `SyncedStore.swift` only syncs
+  `learned.json`, `vocabulary.json`, `snippets.json` (`grep -n history`
+  across `SyncedStore.swift`/`SyncMerge.swift`/`AppPaths.swift` had zero
+  hits). No merge-key work was needed for this feature.
+- `AppDelegate.stopAndTranscribe` now calls `applyReportingMatches` instead
+  of `apply(in:)` and threads the non-empty result into `history.add(...,
+  appliedCorrections:)`; empty results pass `nil` so old and new entries stay
+  indistinguishable in storage when nothing fired.
+- History row caption format settled on `"heard" → "intended" ×N` (curly
+  quotes + →, matching `LearnOutcome.summary`; `×N` matching the Training
+  page's `timesSeen` display) rather than the ticket's plain-ASCII example -
+  the ticket asked to follow the file's existing typography conventions,
+  and this is the established one for describing a correction as text.
+- TDD note: the `HistoryEntry` round-trip has no implementation to get wrong
+  once the field exists (Swift's Codable synthesis handles it for free), so
+  RED was produced by temporarily adding an explicit `CodingKeys` enum that
+  omitted the new key - a real class of regression (a hand-maintained key
+  list forgetting a new field) - then removed for GREEN.

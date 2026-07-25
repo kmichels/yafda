@@ -53,8 +53,9 @@ struct MutterMain {
             let learnedPassed = await LearnedStore.runSelfTest()
             let syncPassed = SyncMerge.runSelfTest()
             let micPassed = MicMonitor.runSelfTest()
+            let historyPassed = HistoryStore.runSelfTest()
             exit(formatterPassed && learnedPassed && syncPassed && micPassed
-                 ? 0 : 1)
+                 && historyPassed ? 0 : 1)
 
         case .format(let text):
             // Same pipeline as live dictation: format, apply learned

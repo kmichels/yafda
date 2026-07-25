@@ -692,6 +692,18 @@ struct HomePage: View {
         }
     }
 
+    /// One line summarising which LearnedStore rules fired on this
+    /// transcript, e.g. `“Konrad” → “laptop” ×2`. Mirrors the curly-quote /
+    /// arrow convention `LearnOutcome.summary` uses for the same kind of
+    /// correction, and the `×N` convention the Training page uses for
+    /// repeat counts.
+    private func appliedCorrectionsCaption(_ corrections: [AppliedCorrection]) -> String {
+        corrections.map { correction in
+            let mapping = "“\(correction.heard)” → “\(correction.intended)”"
+            return correction.count > 1 ? "\(mapping) ×\(correction.count)" : mapping
+        }.joined(separator: ", ")
+    }
+
     private func historyRow(_ entry: HistoryEntry) -> some View {
         let hovered = hoveredRow == entry.id
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
@@ -700,10 +712,18 @@ struct HomePage: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .frame(width: 80, alignment: .leading)
-            Text(entry.text.replacingOccurrences(of: "\n", with: " "))
-                .font(.system(size: 14))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.text.replacingOccurrences(of: "\n", with: " "))
+                    .font(.system(size: 14))
+                    .lineLimit(2)
+                if let corrections = entry.appliedCorrections, !corrections.isEmpty {
+                    Text(appliedCorrectionsCaption(corrections))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if hovered {
                 HStack(spacing: 14) {
                     Button {

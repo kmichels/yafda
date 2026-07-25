@@ -329,7 +329,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 var formatted = TextFormatter(
                     dictionary: VocabularyStore.correctionMap(from: vocabEntries)
                 ).format(disambiguated)
-                formatted = LearnedStore.apply(in: formatted)
+                // Reporting variant, not apply(in:) - AMUX-755: History needs
+                // to show which rule fired so a poisoned one is spotted at a
+                // glance instead of taking hours to diagnose.
+                let correctionResult = LearnedStore.applyReportingMatches(
+                    in: formatted, using: LearnedStore.load().corrections)
+                formatted = correctionResult.text
+                let appliedCorrections = correctionResult.applied
                 formatted = SnippetStore.expand(in: formatted)
 
                 // Per-app style: rewrite tone on-device (Apple Intelligence).
@@ -349,7 +355,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     // History, correction diffing and the Voice Profile all read
                     // this, so it stays trimmed. Only the pasted copy gets the
                     // trailing space.
-                    history.add(formatted, duration: duration)
+                    history.add(formatted, duration: duration,
+                                appliedCorrections: appliedCorrections.isEmpty
+                                    ? nil : appliedCorrections)
                     entries = history.entries
                     refreshVoiceProfileIfDue()
                     let forCursor = TextFormatter.forInsertion(

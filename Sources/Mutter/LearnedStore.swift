@@ -22,6 +22,16 @@ struct LearnedPair: Equatable {
     var intended: String
 }
 
+/// One rule that fired during a single `applyReportingMatches` pass, and how
+/// many occurrences it replaced. AMUX-755: `apply(in:)` rewrites used to be
+/// invisible, so a poisoned rule took hours to diagnose - this is what lets
+/// History show which rule fired on a given transcript.
+struct AppliedCorrection: Codable, Equatable {
+    var heard: String
+    var intended: String
+    var count: Int
+}
+
 /// What a transcript fix taught Mutter, and what it declined to learn.
 struct LearnOutcome: Equatable {
     var learned: [LearnedPair] = []
@@ -241,7 +251,17 @@ enum LearnedStore {
     }
 
     /// Fixes known mishearings in a single left-to-right pass, so no region of
-    /// `text` is rewritten more than once.
+    /// `text` is rewritten more than once. Thin wrapper over
+    /// `applyReportingMatches`, which holds the walk - AMUX-755 added match
+    /// reporting without giving the single-pass logic a second home.
+    static func apply(in text: String, using corrections: [LearnedCorrection]) -> String {
+        applyReportingMatches(in: text, using: corrections).text
+    }
+
+    /// Same single-pass walk as `apply(in:using:)`, additionally reporting
+    /// which rules fired and how many occurrences each replaced - AMUX-755:
+    /// a poisoned rule ("Konrad" -> "laptop") took hours to diagnose because
+    /// transcripts arrived wrong with no trace of which rule fired.
     ///
     /// The previous implementation applied each correction as a global regex
     /// over the same mutating string, which meant A -> B followed by B -> A
@@ -253,8 +273,10 @@ enum LearnedStore {
     /// makes lookup roughly an order of magnitude faster than an unindexed
     /// single pass, and comfortably faster than the regex implementation it
     /// replaces.
-    static func apply(in text: String, using corrections: [LearnedCorrection]) -> String {
-        guard !corrections.isEmpty else { return text }
+    static func applyReportingMatches(
+        in text: String, using corrections: [LearnedCorrection]
+    ) -> (text: String, applied: [AppliedCorrection]) {
+        guard !corrections.isEmpty else { return (text, []) }
         // Longest first so overlapping mappings resolve predictably. The
         // secondary keys make the ordering total: Swift's sort is not
         // guaranteed stable, so equal-length rules would otherwise resolve
@@ -275,6 +297,14 @@ enum LearnedStore {
 
         var result = ""
         var index = text.startIndex
+        // Keyed by `id` rather than the (heard, intended) pair so this stays
+        // correct even if a caller ever passed two rules for the same heard
+        // phrase - `LearnedStore.merging` normally guarantees only one.
+        // `matchOrder` preserves first-fired order, which is the order
+        // History shows: whichever rule a transcript hit first, first.
+        var matchOrder: [UUID] = []
+        var matchedRule: [UUID: LearnedCorrection] = [:]
+        var matchCounts: [UUID: Int] = [:]
         while index < text.endIndex {
             var matched = false
             // `.lowercased().first` rather than Character(_:) - lowercasing a
@@ -288,6 +318,11 @@ enum LearnedStore {
                     result += correction.intended
                     index = end
                     matched = true
+                    if matchCounts[correction.id] == nil {
+                        matchOrder.append(correction.id)
+                        matchedRule[correction.id] = correction
+                    }
+                    matchCounts[correction.id, default: 0] += 1
                     break
                 }
             }
@@ -296,7 +331,11 @@ enum LearnedStore {
                 index = text.index(after: index)
             }
         }
-        return result
+        let applied = matchOrder.compactMap { id -> AppliedCorrection? in
+            guard let rule = matchedRule[id], let count = matchCounts[id] else { return nil }
+            return AppliedCorrection(heard: rule.heard, intended: rule.intended, count: count)
+        }
+        return (result, applied)
     }
 
     /// Whether a match starting at `index` would begin a whole word.
@@ -753,6 +792,45 @@ enum LearnedStore {
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): apply/\(testCase.name) = \"\(testCase.got)\"" +
                   (ok ? "" : " (expected \"\(testCase.expected)\")"))
+        }
+
+        // MARK: applyReportingMatches - observability for AMUX-755
+        // Same single-pass walk as apply(in:using:), additionally reporting
+        // which rules fired and how many occurrences each replaced. Text
+        // output must match apply(in:using:) exactly for identical input -
+        // that identity is itself part of what each case asserts.
+        let reportingCases: [(name: String, text: String, corrections: [LearnedCorrection],
+                              expectedText: String, expectedApplied: [AppliedCorrection])] = [
+            ("multi-occurrence of one rule",
+             "Ask Konrad. Also tell Konrad.",
+             [LearnedCorrection(heard: "Konrad", intended: "laptop")],
+             "Ask laptop. Also tell laptop.",
+             [AppliedCorrection(heard: "Konrad", intended: "laptop", count: 2)]),
+            ("overlapping rules counted separately, in first-match order",
+             "focus Phocus focus",
+             [LearnedCorrection(heard: "focus", intended: "Phocus"),
+              LearnedCorrection(heard: "Phocus", intended: "focus")],
+             "Phocus focus Phocus",
+             [AppliedCorrection(heard: "focus", intended: "Phocus", count: 2),
+              AppliedCorrection(heard: "Phocus", intended: "focus", count: 1)]),
+            ("no matches reports empty applied",
+             "Hello world.", [LearnedCorrection(heard: "Konrad", intended: "laptop")],
+             "Hello world.", []),
+            ("empty corpus reports empty applied",
+             "untouched", [], "untouched", []),
+        ]
+        for testCase in reportingCases {
+            let got = LearnedStore.applyReportingMatches(
+                in: testCase.text, using: testCase.corrections)
+            let plain = LearnedStore.apply(in: testCase.text, using: testCase.corrections)
+            let ok = got.text == testCase.expectedText
+                && got.applied == testCase.expectedApplied
+                && got.text == plain
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): applyReportingMatches/\(testCase.name) = " +
+                  "text: \"\(got.text)\", applied: \(got.applied)" +
+                  (ok ? "" : " (expected text: \"\(testCase.expectedText)\", " +
+                        "applied: \(testCase.expectedApplied))"))
         }
 
         // MARK: Outcome summaries
