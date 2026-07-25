@@ -44,9 +44,10 @@ struct VocabularyDisambiguator {
         }
 
         guard let candidate,
-              Self.accept(original: transcript, candidate: candidate, vocabulary: vocabulary)
+              let safe = Self.sanitized(
+                  original: transcript, candidate: candidate, vocabulary: vocabulary)
         else { return transcript }
-        return candidate
+        return safe
     }
 
     /// Runs `operation`, returning its result, or nil if `timeout` elapses first.
@@ -71,26 +72,38 @@ struct VocabularyDisambiguator {
         }
     }
 
-    /// Structural safety net. Accepts `candidate` only when every difference
-    /// from `original` is a whole-word substitution whose replacement is a
-    /// vocabulary term (comparing each word with surrounding punctuation
-    /// stripped, case-insensitively). Same word count required (v1 handles 1:1
-    /// substitution only, so multi-word vocab terms simply fall back). The
-    /// no-change case is accepted. A rephrase, insertion, deletion, reorder, or
-    /// substitution to a non-vocab word is rejected — the caller then keeps the
-    /// original transcript.
-    static func accept(original: String, candidate: String, vocabulary: [String]) -> Bool {
+    /// Structural safety net, and the ONLY text that may reach the user. The
+    /// model's candidate is used solely as a list of substitution decisions;
+    /// the returned string is rebuilt from the ORIGINAL transcript's words, so
+    /// nothing the model adds around a word — markdown emphasis, quotes,
+    /// stray punctuation — can ever be inserted. (The 2026-07-25 "**repo**"
+    /// bug: the old Bool gate compared punctuation-stripped cores but then
+    /// shipped the model's raw text, so `**repo**` passed as "unchanged".)
+    ///
+    /// Returns nil when the candidate is not a pure 1:1 whole-word
+    /// substitution toward vocabulary terms — rephrase, insertion, deletion,
+    /// reorder, recasing of a non-vocab word, newline injection, or a
+    /// substitution to a non-vocab word — and the caller keeps the raw
+    /// transcript. Multi-word vocab terms fall back (v1 is 1:1 only).
+    ///
+    /// For an accepted substitution the output word is the vocabulary term in
+    /// its canonical casing, wrapped in the ORIGINAL word's surrounding
+    /// punctuation — so "focus." becomes "Phocus." even when the model
+    /// answered "**Phocus**" or dropped the period.
+    static func sanitized(
+        original: String, candidate: String, vocabulary: [String]
+    ) -> String? {
         // Split on any whitespace (spaces, tabs, newlines), not just U+0020,
         // so punctuation stripping and matching don't break on a stray newline.
         let originalWords = original.split(whereSeparator: \.isWhitespace).map(String.init)
         let candidateWords = candidate.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard originalWords.count == candidateWords.count else { return false }
+        guard originalWords.count == candidateWords.count else { return nil }
         // Reject whitespace injection the token split is blind to: the split
         // collapses whitespace runs, so a newline the model added (which could
         // submit a form or break insertion) would otherwise pass. The raw
         // transcript has no newlines at this pre-format stage.
         if candidate.contains(where: \.isNewline), !original.contains(where: \.isNewline) {
-            return false
+            return nil
         }
         // Word core: strip surrounding punctuation but KEEP case, so a
         // sentence-final "Phocus." matches the term while an unrequested
@@ -100,16 +113,39 @@ struct VocabularyDisambiguator {
         func core(_ word: String) -> String {
             String(word.trimmingCharacters(in: .punctuationCharacters))
         }
-        let vocab = Set(vocabulary.map { $0.lowercased() })
-        for (originalWord, candidateWord) in zip(originalWords, candidateWords) {
-            if core(originalWord) == core(candidateWord) { continue }
-            // A changed word is allowed only if it IS a vocabulary term (matched
-            // case-insensitively). A multi-word vocab term is one Set element
-            // and never equals a single token, so multi-word substitutions fall
-            // back — v1 is 1:1 whole-word substitution only.
-            guard vocab.contains(core(candidateWord).lowercased()) else { return false }
+        // Canonical casing per term, keyed case-insensitively. First entry
+        // wins if the user somehow has two casings of the same term.
+        var canonical: [String: String] = [:]
+        for term in vocabulary {
+            let key = term.lowercased()
+            if canonical[key] == nil { canonical[key] = term }
         }
-        return true
+        var rebuilt: [String] = []
+        var substituted = false
+        for (originalWord, candidateWord) in zip(originalWords, candidateWords) {
+            if core(originalWord) == core(candidateWord) {
+                // Unchanged core: the original word is authoritative. Any
+                // decoration the model added dies here.
+                rebuilt.append(originalWord)
+                continue
+            }
+            // A changed word is allowed only if it IS a vocabulary term
+            // (matched case-insensitively). A multi-word vocab term is one
+            // dictionary entry and never equals a single token, so multi-word
+            // substitutions fall back — v1 is 1:1 whole-word substitution only.
+            guard let term = canonical[core(candidateWord).lowercased()] else {
+                return nil
+            }
+            let prefix = originalWord.prefix { $0.isPunctuation }
+            let suffix = String(
+                originalWord.reversed().prefix { $0.isPunctuation }.reversed())
+            rebuilt.append(String(prefix) + term + suffix)
+            substituted = true
+        }
+        // No real substitution: return the original transcript itself, not a
+        // re-join, so its exact whitespace survives.
+        guard substituted else { return original }
+        return rebuilt.joined(separator: " ")
     }
 }
 

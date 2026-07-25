@@ -1377,40 +1377,63 @@ enum LearnedStore {
         // substitution toward a vocab term and the no-change case, and reject
         // anything else.
         let disambigGuardCases: [(name: String, vocab: [String],
-                          original: String, candidate: String, accept: Bool)] = [
+                          original: String, candidate: String, expected: String?)] = [
             ("clean substitution toward a vocab term", ["Phocus"],
-             "send it to focus today", "send it to Phocus today", true),
-            ("no change", ["Phocus"],
-             "i need to focus", "i need to focus", true),
-            ("case-insensitive vocab match", ["Phocus"],
-             "open focus now", "open phocus now", true),
+             "send it to focus today", "send it to Phocus today",
+             "send it to Phocus today"),
+            ("no change returns the original verbatim", ["Phocus"],
+             "i need to focus", "i need to focus", "i need to focus"),
+            // The model may emit any casing of the term; the output always
+            // carries the vocabulary's canonical casing.
+            ("case-insensitive match canonicalizes casing", ["Phocus"],
+             "open focus now", "open phocus now", "open Phocus now"),
             // Regression: a sentence-final substitution keeps its punctuation.
             ("substitution keeps trailing punctuation", ["Phocus"],
-             "does the word focus.", "does the word Phocus.", true),
+             "does the word focus.", "does the word Phocus.",
+             "does the word Phocus."),
+            // The **repo** bug (2026-07-25): the model wraps a vocab word it
+            // "confirmed" in markdown emphasis. Cores compare equal, so the old
+            // gate shipped the model's text, asterisks and all. The output must
+            // be rebuilt from the ORIGINAL words instead.
+            ("model-added emphasis on an unchanged word is dropped", ["repo"],
+             "push the repo now", "push the **repo** now", "push the repo now"),
+            ("model-added emphasis on a substitution is dropped", ["Phocus"],
+             "send it to focus.", "send it to **Phocus**.",
+             "send it to Phocus."),
+            // The model dropped the original punctuation; the rebuild restores
+            // it from the original word.
+            ("substitution restores dropped punctuation", ["Phocus"],
+             "send it to focus.", "send it to Phocus", "send it to Phocus."),
+            // Backticks are Unicode symbols, not punctuation, so the wrapped
+            // token never core-matches a vocab term: whole candidate rejected,
+            // caller keeps the raw transcript. Artifact-proof either way.
+            ("backtick wrap falls back", ["Phocus"],
+             "send it to focus", "send it to `Phocus`", nil),
             // Multi-word term: v1 does not substitute toward it (the term is a
             // single Set element, never a single token), so it falls back.
             ("multi-word term falls back (v1 unsupported)", ["Apple Vision Pro"],
-             "i want apple vision pro", "i want Apple Vision Pro", false),
+             "i want apple vision pro", "i want Apple Vision Pro", nil),
             // Loophole closed: the model may not recase an arbitrary non-vocab
             // word and have it pass as "no change".
             ("recasing a non-vocab word is rejected", ["Phocus"],
-             "i love my macbook", "i love my MacBook", false),
+             "i love my macbook", "i love my MacBook", nil),
             ("rephrase changes word count", ["Phocus"],
-             "send it to focus", "please send it to Phocus", false),
+             "send it to focus", "please send it to Phocus", nil),
             ("insertion", ["Phocus"],
-             "send it to focus", "send it to Phocus really", false),
+             "send it to focus", "send it to Phocus really", nil),
             ("substitution to a non-vocab word", ["Phocus"],
-             "send it to focus", "send it to Lightroom", false),
+             "send it to focus", "send it to Lightroom", nil),
             ("newline injection is rejected", ["Phocus"],
-             "send it to focus", "send it to\nPhocus", false),
+             "send it to focus", "send it to\nPhocus", nil),
         ]
         for testCase in disambigGuardCases {
-            let got = VocabularyDisambiguator.accept(
+            let got = VocabularyDisambiguator.sanitized(
                 original: testCase.original, candidate: testCase.candidate,
                 vocabulary: testCase.vocab)
-            let ok = got == testCase.accept
+            let ok = got == testCase.expected
             if !ok { passed = false }
-            print("\(ok ? "PASS" : "FAIL"): guard/\(testCase.name) = \(got)")
+            print("\(ok ? "PASS" : "FAIL"): guard/\(testCase.name) = " +
+                  "\(got ?? "nil")")
         }
 
         // Empty vocabulary short-circuits without a model call, returning input.
