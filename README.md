@@ -109,8 +109,8 @@ Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
 Profile analysis. YAFDA makes no network requests except the one-time
 model downloads by macOS itself (Apple speech assets) and, if you opt into
 the Whisper engine, the model fetch from Hugging Face. Dictation data is
-stored only in `~/Library/Application Support/Mutter/` (renaming the folder
-is a later phase of the YAFDA rename).
+stored only in `~/Library/Application Support/YAFDA/` (migrated
+automatically from the folder's earlier names on first launch).
 
 ## Architecture
 

@@ -146,8 +146,11 @@ Do on each machine separately, app quit, own commit.
    dev `local.mutter.plist`, release `com.konradmichels.mutter.plist`, plus the bare
    executable-name domain `Mutter.plist` if present.
 2. Code: prepend `"YAFDA"` to `dataDirectoryNames`; extend `legacySuiteNames` per anchor 3
-   (both mutter domains, newest first); bump `currentMigrationVersion` → 3; `make_app.sh`
-   `CFBundleIdentifier` → `local.yafda`; `release.sh` `BUNDLE_ID` → `com.konradmichels.yafda`.
+   (both mutter domains, newest first — plus `local.yafda` at the head, covering a dev-YAFDA
+   interlude before a machine's first release install); `make_app.sh` `CFBundleIdentifier` →
+   `local.yafda`; `release.sh` `BUNDLE_ID` → `com.konradmichels.yafda`. **No migration
+   version bump** — the marker lives in the new (empty) domain, so the one-shot copy runs
+   there regardless; see Implementation Notes.
 3. Per machine, **hand-`mv` first, build second**:
    `mv ~/Library/Application\ Support/Mutter ~/Library/Application\ Support/YAFDA` (laptop
    and mac-mini-pro; bot-mini has no real data dir, selftests self-heal via absent-or-empty).
@@ -262,6 +265,27 @@ for 1–2, one coordinated session for 3–4.
    deploy script quits both names.
 4. **Someone "cleans up" WhisperFlow Dev** — still no. Three renames later the comment in
    `make_app.sh` stays.
+
+## Implementation Notes (living)
+
+### 2026-07-25 — Phases 1–4 code landed on `design/rename-to-yafda` (cab74aa..ec6f3fb)
+
+- Suite is **186** tests now, not the doc's stale "172"; gate held at 0 FAIL throughout.
+- **Migration version stays 2** (doc said bump to 3): the marker lives in the *new* defaults
+  domain, which starts at 0, so the one-shot copy runs after any bundle-id change without a
+  bump. Bumping would only force a re-run inside an unchanged domain — not this situation.
+- `SyncMerge.runSelfTest`'s folder-name assertion now compares against
+  `AppPaths.syncedDirectoryName` instead of a hardcoded literal — stays correct through
+  every phase and every future rename.
+- `deploy-mac.sh` quits/removes **both** `Mutter` and `YAFDA` during the transition (drop
+  the Mutter arm once no machine runs a Mutter build).
+- **Launch guard verified live on bot-mini**: a YAFDA build's selftest with
+  `CloudDocs/Mutter` present and `YAFDA` absent yielded `syncedDirectory = nil` and created
+  no folder. (Cosmetic: the selftest's nil caption says "iCloud Drive unavailable", which
+  conflates the legacy-guard skip with true unavailability — fine to leave.)
+- Phase 3+4 code is COMMITTED but deploy is gated: no machine may build+launch this branch
+  until the CloudDocs folder rename lands (bot-mini selftests are safe, the guard covers
+  them).
 
 ## Review log (Gemini, 2026-07-25)
 

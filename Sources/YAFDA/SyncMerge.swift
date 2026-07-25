@@ -207,7 +207,7 @@ enum SyncMerge {
             ("/Applications/AppTranslocation/X/d/YAFDA.app", .translocated),
             ("/Users/konrad/Downloads/YAFDA.app", .looseOnDisk),
             ("/Volumes/YAFDA/YAFDA.app", .looseOnDisk),
-            ("/Users/konrad/projects/mutter/build/YAFDA.app", .looseOnDisk),
+            ("/Users/konrad/projects/yafda/build/YAFDA.app", .looseOnDisk),
         ]
         for testCase in locationCases {
             let got = AppPaths.installLocation(of: testCase.path)

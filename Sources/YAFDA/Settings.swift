@@ -36,9 +36,13 @@ enum Settings {
     /// shipped under BOTH at once — `com.konradmichels.mutter` is the release
     /// install's domain (mac-mini-pro) and `local.mutter` the dev build's
     /// (laptop); omitting either silently factory-resets that machine.
+    /// `local.yafda` leads: if a machine ran a dev YAFDA build before its
+    /// first release install, that domain holds the newest settings. For the
+    /// dev build itself the entry is its own domain and copies nothing, same
+    /// as `local.mutter` always did.
     private static let legacySuiteNames = [
-        "com.konradmichels.mutter", "local.mutter", "local.murmur",
-        "local.whisperflow",
+        "local.yafda", "com.konradmichels.mutter", "local.mutter",
+        "local.murmur", "local.whisperflow",
     ]
 
     /// Every key Settings owns. This list is the whole migration: a key
