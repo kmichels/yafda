@@ -123,8 +123,8 @@ enum AppPaths {
     /// once, because two machines racing to move a folder in eventually-
     /// consistent storage is unrecoverable. The legacy name survives here only
     /// so a machine that has not yet seen the rename can recognise it and wait.
-    static let syncedDirectoryName = "Mutter"
-    static let legacySyncedDirectoryNames = ["Murmur"]
+    static let syncedDirectoryName = "YAFDA"
+    static let legacySyncedDirectoryNames = ["Mutter", "Murmur"]
 
     static var syncedDirectory: URL? {
         let cloud = FileManager.default.homeDirectoryForCurrentUser

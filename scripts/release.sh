@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds, signs, notarizes and packages the distributable Mutter release.
+# Builds, signs, notarizes and packages the distributable YAFDA release.
 #
 # Runs headlessly on bot-mini, which holds the Developer ID identity and the
 # validated notary keychain profile. Design and rationale:
@@ -19,14 +19,14 @@ NOTARY_PROFILE="palomino-notary"
 BUNDLE_ID="com.konradmichels.yafda"
 VERSION=$(tr -d '[:space:]' < VERSION)
 BUILD_NUMBER=$(git rev-list --count HEAD)
-APP="dist/Mutter.app"
-DMG="dist/Mutter-${VERSION}.dmg"
+APP="dist/YAFDA.app"
+DMG="dist/YAFDA-${VERSION}.dmg"
 
 # --- 0. Preflight: prove headless signing works before a long build -----------
 # The classic failure is errSecInternalComponent from a locked keychain or a
 # missing partition-list entry. Catch it in two seconds, with the remediation
 # printed, instead of after the notarization wait.
-PROBE=$(mktemp /tmp/mutter-sign-probe.XXXXXX)
+PROBE=$(mktemp /tmp/yafda-sign-probe.XXXXXX)
 cp /bin/ls "$PROBE"
 if ! codesign --force --timestamp --sign "$IDENTITY" "$PROBE" >/dev/null 2>&1; then
     rm -f "$PROBE"
@@ -48,9 +48,9 @@ swift build -c release
 # --- 2. Assemble the bundle ---------------------------------------------------
 rm -rf "$APP" "$DMG"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Mutter "$APP/Contents/MacOS/Mutter"
-if [ -f "Resources/Mutter.icns" ]; then
-    cp Resources/Mutter.icns "$APP/Contents/Resources/Mutter.icns"
+cp .build/release/YAFDA "$APP/Contents/MacOS/YAFDA"
+if [ -f "Resources/YAFDA.icns" ]; then
+    cp Resources/YAFDA.icns "$APP/Contents/Resources/YAFDA.icns"
 fi
 
 # Same layout as make_app.sh with three deliberate differences: the release
@@ -69,11 +69,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
-    <string>Mutter</string>
+    <string>YAFDA</string>
     <key>CFBundleExecutable</key>
-    <string>Mutter</string>
+    <string>YAFDA</string>
     <key>CFBundleIconFile</key>
-    <string>Mutter</string>
+    <string>YAFDA</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -85,7 +85,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMultipleInstancesProhibited</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Mutter records your voice while you hold the dictation key so it can transcribe it on-device.</string>
+    <string>YAFDA records your voice while you hold the dictation key so it can transcribe it on-device.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Konrad Michels. On-device dictation - no audio leaves this Mac.</string>
 </dict>
@@ -99,15 +99,15 @@ codesign --force --options runtime --timestamp \
     --sign "$IDENTITY" "$APP"
 
 # --- 4. Package the DMG -------------------------------------------------------
-STAGE=$(mktemp -d /tmp/mutter-dmg-stage.XXXXXX)
+STAGE=$(mktemp -d /tmp/yafda-dmg-stage.XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
-ditto "$APP" "$STAGE/Mutter.app"
+ditto "$APP" "$STAGE/YAFDA.app"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Mutter" -srcfolder "$STAGE" -format UDZO -quiet "$DMG"
+hdiutil create -volname "YAFDA" -srcfolder "$STAGE" -format UDZO -quiet "$DMG"
 
 # --- 5. Notarize: ONE submission, of the DMG, then staple both artifacts ------
 # Tickets are per code-signature hash and a DMG submission covers the nested
-# app, so the loose dist/Mutter.app used for direct pushes can be stapled from
+# app, so the loose dist/YAFDA.app used for direct pushes can be stapled from
 # the same submission. stapler exits nonzero if that ever stops being true.
 xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG"
