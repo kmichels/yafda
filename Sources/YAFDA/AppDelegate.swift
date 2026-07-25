@@ -209,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
         process.arguments = [
             "reset", "Accessibility",
-            Bundle.main.bundleIdentifier ?? "local.mutter",
+            Bundle.main.bundleIdentifier ?? "local.yafda",
         ]
         try? process.run()
         process.waitUntilExit()

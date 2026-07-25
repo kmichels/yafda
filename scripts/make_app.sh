@@ -28,7 +28,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
          keyed on the bundle id. Settings.migrateLegacyDefaults carries the
          preferences across; the permissions have to be re-granted by hand. -->
     <key>CFBundleIdentifier</key>
-    <string>local.mutter</string>
+    <string>local.yafda</string>
     <key>CFBundleName</key>
     <string>YAFDA</string>
     <key>CFBundleExecutable</key>

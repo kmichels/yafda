@@ -32,10 +32,13 @@ enum Settings {
     /// whichever domain is listed first wins. Getting the order wrong, or
     /// omitting the most recent id, silently restores *older* settings rather
     /// than resetting to defaults — which is worse, because it looks
-    /// deliberate. `local.mutter` must stay at the head of this list until
-    /// something newer replaces it.
+    /// deliberate. The two Mutter-era ids lead the list because the app
+    /// shipped under BOTH at once — `com.konradmichels.mutter` is the release
+    /// install's domain (mac-mini-pro) and `local.mutter` the dev build's
+    /// (laptop); omitting either silently factory-resets that machine.
     private static let legacySuiteNames = [
-        "local.mutter", "local.murmur", "local.whisperflow",
+        "com.konradmichels.mutter", "local.mutter", "local.murmur",
+        "local.whisperflow",
     ]
 
     /// Every key Settings owns. This list is the whole migration: a key

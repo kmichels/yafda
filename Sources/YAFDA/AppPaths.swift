@@ -5,10 +5,10 @@ enum AppPaths {
     private static let log = Logger(subsystem: "local.yafda", category: "AppPaths")
 
     /// Every name this app's data folder has had, newest first. The app has
-    /// been renamed twice (WhisperFlow -> Murmur -> Mutter) and each rename
-    /// has to keep carrying the one before it, or a machine that skipped a
-    /// generation silently starts empty.
-    static let dataDirectoryNames = ["Mutter", "Murmur", "WhisperFlow"]
+    /// been renamed three times (WhisperFlow -> Murmur -> Mutter -> YAFDA) and
+    /// each rename has to keep carrying the one before it, or a machine that
+    /// skipped a generation silently starts empty.
+    static let dataDirectoryNames = ["YAFDA", "Mutter", "Murmur", "WhisperFlow"]
 
     static var supportDirectory: URL {
         let base = FileManager.default.urls(

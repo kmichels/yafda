@@ -7,7 +7,7 @@
 # distribution rather than the App Store).
 #
 # Dev builds are scripts/make_app.sh and stay per-machine/self-signed; this
-# script owns the release identity (com.konradmichels.mutter + Developer ID),
+# script owns the release identity (com.konradmichels.yafda + Developer ID),
 # which is deliberately a DIFFERENT TCC identity, so a hacked-on dev build
 # never rides on the release build's permission grants.
 set -euo pipefail
@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.."
 
 IDENTITY="Developer ID Application: Konrad Michels (85QL287QYW)"
 NOTARY_PROFILE="palomino-notary"
-BUNDLE_ID="com.konradmichels.mutter"
+BUNDLE_ID="com.konradmichels.yafda"
 VERSION=$(tr -d '[:space:]' < VERSION)
 BUILD_NUMBER=$(git rev-list --count HEAD)
 APP="dist/Mutter.app"

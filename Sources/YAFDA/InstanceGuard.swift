@@ -4,7 +4,7 @@ import os
 
 /// Refuses to run alongside another YAFDA under a different bundle id.
 ///
-/// Dev (`local.mutter`) and release (`com.konradmichels.mutter`) builds are
+/// Dev (`local.yafda`) and release (`com.konradmichels.yafda`) builds are
 /// different bundle ids, so `LSMultipleInstancesProhibited` no longer
 /// prevents one of each running at once - while both share the same data
 /// folder (keyed on app NAME, deliberately: dogfooding is the QA) and the
@@ -67,8 +67,8 @@ enum InstanceGuard {
 
     static func runSelfTest() -> Bool {
         var passed = true
-        let releaseID = "com.konradmichels.mutter"
-        let devID = "local.mutter"
+        let releaseID = "com.konradmichels.yafda"
+        let devID = "local.yafda"
         let cases: [(name: String, apps: [AppDescriptor], expectConflict: Bool)] = [
             ("dev running, release launching",
              [AppDescriptor(executableName: "YAFDA", bundleID: devID, isSelf: false)],
