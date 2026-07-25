@@ -61,4 +61,34 @@ No new I/O paths; store writes reuse existing save().
 
 ## Implementation Notes (Living Section)
 
-(fill in during implementation)
+### 2026-07-25 - Implemented as designed, one layout deviation
+
+- `LearnedStore.removeTerm(_:)` added exactly as specified: loads, filters
+  `terms` case-insensitively, saves and returns `true` only if the count
+  actually changed. Mirrors `addTerm`'s load/mutate/save shape rather than
+  taking an inout store, since the Training page's delete button (like its
+  "Learned corrections" sibling) drives it as a fire-and-reload action, not
+  through the batched `record()` path.
+- Deviation from the spec's literal reading: rather than replacing the
+  "Vocabulary hints" caption in place inside the "Learned corrections" card,
+  the trained-words list became its own third card ("Trained words"),
+  matching how "Teach a word or phrase" and "Learned corrections" are each
+  already separate cards. A caption-sized list with per-row delete buttons
+  didn't fit inside the corrections card without crowding it; a dedicated
+  card keeps the row/trash-button styling identical to "Learned corrections"
+  as required, just at the page level rather than nested in the same card.
+- Refresh-staleness fix: added `.onChange(of: model.result)` next to the
+  existing `.onAppear` on the result `Text`. `onAppear` only fires when a
+  view is first inserted into the hierarchy; a second training attempt while
+  the result text is already showing left both lists stale (the original
+  bug: "cowork" trained successfully but appeared in no list). `onChange`
+  covers every subsequent attempt.
+- Self-tests: two new cases in `LearnedStore.runSelfTest()` under `MARK:
+  removeTerm`, isolated via `LearnedStore.directoryOverride` pointed at a
+  temp dir (never touches `~/Library`) - case-insensitive round trip
+  persisted through `load()`, and a no-op removal of an absent term. Full
+  suite: 0 FAIL, exit 0 before and after.
+- `LearnedStore.swift` and `MainView.swift` both already exceeded the
+  500-line hook threshold before this change (1037 and 1783 lines); the
+  hook fires as a WARNING (edits are not blocked) and splitting either file
+  is out of scope for this ticket.

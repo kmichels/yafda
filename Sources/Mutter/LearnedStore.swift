@@ -180,6 +180,21 @@ enum LearnedStore {
         }
     }
 
+    /// Removes a taught term case-insensitively. The Training page's delete
+    /// button drives this directly, so it reloads and saves like `addTerm`
+    /// rather than taking an inout store - callers never see a stale copy.
+    /// - Returns: whether a term was actually removed.
+    @discardableResult
+    static func removeTerm(_ term: String) -> Bool {
+        var learned = load()
+        let key = term.lowercased()
+        let countBefore = learned.terms.count
+        learned.terms.removeAll { $0.lowercased() == key }
+        guard learned.terms.count != countBefore else { return false }
+        save(learned)
+        return true
+    }
+
     /// Learns from a user-corrected transcript: extracts word-level
     /// substitutions and stores those that pass the guards.
     /// - Returns: the mappings learned and those skipped.
@@ -785,6 +800,40 @@ enum LearnedStore {
         print("\(accumulatedOK ? "PASS" : "FAIL"): record(\"alpha\"->\"beta\" then " +
               "\"beta\"->\"alpha\") = \(firstResult), \(secondResult), corrections = " +
               "\(accumulating.corrections.map { "\($0.heard)->\($0.intended)" })")
+
+        // MARK: removeTerm (AMUX-753 trained-words list)
+        // The Training page's delete button drives removeTerm directly against
+        // disk, so the round trip through load()/save() is the contract that
+        // matters, not just an in-memory array shuffle.
+        do {
+            let termsTmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mutter-selftest-terms", isDirectory: true)
+            try? FileManager.default.removeItem(at: termsTmp)
+            try? FileManager.default.createDirectory(at: termsTmp, withIntermediateDirectories: true)
+            LearnedStore.directoryOverride = termsTmp
+            defer {
+                LearnedStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: termsTmp)
+            }
+
+            LearnedStore.addTerm("Søren")
+            LearnedStore.addTerm("Baseten")
+            let removedMixedCase = LearnedStore.removeTerm("søren")
+            let mixedCaseOK = removedMixedCase
+                && !LearnedStore.load().terms.contains { $0.lowercased() == "søren" }
+                && LearnedStore.load().terms.contains("Baseten")
+            if !mixedCaseOK { passed = false }
+            print("\(mixedCaseOK ? "PASS" : "FAIL"): removeTerm is case-insensitive and " +
+                  "persists across load() = \(removedMixedCase), terms = " +
+                  "\(LearnedStore.load().terms)")
+
+            let beforeAbsent = LearnedStore.load().terms
+            let removedAbsent = LearnedStore.removeTerm("nonexistent")
+            let absentOK = !removedAbsent && LearnedStore.load().terms == beforeAbsent
+            if !absentOK { passed = false }
+            print("\(absentOK ? "PASS" : "FAIL"): removeTerm of an absent term returns " +
+                  "false and leaves terms unchanged")
+        }
 
         // MARK: Audio device enumeration
         // CoreAudio results depend on what is plugged in, so assert contracts

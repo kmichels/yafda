@@ -1719,7 +1719,12 @@ struct TrainingPage: View {
                     Text(result)
                         .font(.callout)
                         .foregroundStyle(Palette.accent)
+                        // onAppear alone only fires once: the Text view stays in
+                        // the hierarchy across a second training attempt while
+                        // this page is visible, so onAppear never re-fires and
+                        // both lists below go stale. onChange catches that case.
                         .onAppear { learned = LearnedStore.load() }
+                        .onChange(of: model.result) { _, _ in learned = LearnedStore.load() }
                 }
                 Text("Tip: repeat a word 2–3 times — different mishearings each " +
                      "become their own correction.")
@@ -1767,11 +1772,37 @@ struct TrainingPage: View {
                         Divider()
                     }
                 }
-                if !learned.terms.isEmpty {
-                    Text("Vocabulary hints: " + learned.terms.joined(separator: ", "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 4)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Trained words").font(.headline)
+                Text("Fed to the speech model as expected vocabulary, even when " +
+                     "no mishearing needed correcting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if learned.terms.isEmpty {
+                    Text("Nothing trained yet.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(learned.terms.reversed(), id: \.self) { term in
+                        HStack {
+                            Text("“\(term)”")
+                                .fontWeight(.medium)
+                            Spacer()
+                            Button {
+                                LearnedStore.removeTerm(term)
+                                learned = LearnedStore.load()
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .font(.system(size: 13))
+                        Divider()
+                    }
                 }
             }
             .padding(20)
