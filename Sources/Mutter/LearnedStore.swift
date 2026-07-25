@@ -91,15 +91,23 @@ enum LearnedStore {
     // MARK: - Recording new knowledge
 
     /// Applies one mapping to an in-memory store.
+    /// - Parameter taughtWords: words the user explicitly taught (a
+    ///   `VocabularyStore` snapshot, in production), unioned here with
+    ///   `learned.terms` before being checked. Non-nil only on the automatic
+    ///   path (`learn()`) - the explicit path (`add()`, driven by Voice
+    ///   Training and Dictionary corrections) never passes it, which is what
+    ///   keeps that path unaffected by the taught-word guard.
     /// - Returns: whether the mapping was stored. A rejected mapping still
     ///   contributes its intended wording as a recognition-bias term.
     static func record(heard: String, intended: String,
                        in learned: inout LearnedData,
-                       checker: WordChecker? = nil) -> Bool {
+                       checker: WordChecker? = nil,
+                       taughtWords: Set<String>? = nil) -> Bool {
         let heardTrimmed = normalizePhrase(heard)
         let intendedTrimmed = intended.trimmingCharacters(in: .whitespacesAndNewlines)
         guard shouldStore(heard: heardTrimmed, intended: intendedTrimmed,
-                          existing: learned.corrections, checker: checker) else {
+                          existing: learned.corrections, checker: checker,
+                          taughtWords: taughtWords.map { $0.union(learned.terms) }) else {
             // Still worth biasing recognition toward the intended wording.
             appendTerm(intendedTrimmed, to: &learned)
             return false
@@ -182,14 +190,25 @@ enum LearnedStore {
 
     /// Learns from a user-corrected transcript: extracts word-level
     /// substitutions and stores those that pass the guards.
+    /// - Parameter taughtWords: words the user explicitly taught, for the
+    ///   taught-word guard. Defaults to the real `VocabularyStore` snapshot -
+    ///   self-tests must always inject their own so they never read
+    ///   vocabulary.json.
     /// - Returns: the mappings learned and those skipped.
     @discardableResult
-    static func learn(original: String, corrected: String) -> LearnOutcome {
+    static func learn(original: String, corrected: String,
+                      checker: WordChecker? = nil,
+                      taughtWords: Set<String>? = nil) -> LearnOutcome {
+        // learn() is the automatic path, so it always guards against taught
+        // words - unlike record()'s default, where nil means "skip the
+        // guard" (the explicit path's contract).
+        let effectiveTaughtWords = taughtWords ?? Set(VocabularyStore.words())
         var outcome = LearnOutcome()
         var learned = load()
         for candidate in extractCorrections(original: original, corrected: corrected) {
             let pair = LearnedPair(heard: candidate.heard, intended: candidate.intended)
-            if record(heard: candidate.heard, intended: candidate.intended, in: &learned) {
+            if record(heard: candidate.heard, intended: candidate.intended, in: &learned,
+                     checker: checker, taughtWords: effectiveTaughtWords) {
                 outcome.learned.append(pair)
             } else {
                 outcome.skipped.append(pair)
@@ -433,10 +452,25 @@ enum LearnedStore {
     /// applies to the ordinary-phrase guard, though: the reverse-mapping check
     /// runs unconditionally, since letting an update recreate an A -> B / B ->
     /// A pair would still collapse both terms in `apply`.
+    ///
+    /// - Parameter taughtWords: non-nil only on the automatic path (see
+    ///   `record()`). AMUX-754: the taught-word check below runs before the
+    ///   existing-rule bypass, and deliberately does not share its escape
+    ///   hatch. Without that ordering, a pre-guardrail mislearned rule like
+    ///   "Konrad" -> "laptop" would keep itself alive forever - every fresh
+    ///   diff that reproduced it would find a rule already stored for that
+    ///   `heard` phrase and slip through as an "update" rather than a refused
+    ///   new rule. The explicit path never supplies `taughtWords`, so a
+    ///   deliberate re-teach of a taught word's pronunciation (or a poisoned
+    ///   store repair) still reaches the bypass unchanged.
     private static func shouldStore(heard: String, intended: String,
                                     existing: [LearnedCorrection],
-                                    checker: WordChecker? = nil) -> Bool {
+                                    checker: WordChecker? = nil,
+                                    taughtWords: Set<String>? = nil) -> Bool {
         guard isValidMapping(heard: heard, intended: intended) else { return false }
+        if let taughtWords, containsTaughtWord(heard, taughtWords: taughtWords) {
+            return false
+        }
         if isReverseOfExistingMapping(heard: heard, intended: intended, existing: existing) {
             return false
         }
@@ -445,6 +479,30 @@ enum LearnedStore {
         }
         return isUsefulMapping(heard: heard, intended: intended,
                                existing: existing, checker: checker)
+    }
+
+    /// Whether any whitespace-separated word in `heard` matches, case-
+    /// insensitively, a word the user explicitly taught. Each `taughtWords`
+    /// entry is itself split into words before comparing, so a multi-word
+    /// taught entry ("Apple Vision Pro") still guards each word it contains,
+    /// not just the phrase as a whole.
+    ///
+    /// A multi-word `heard` phrase is refused as soon as any one of its words
+    /// is taught: the diff learner that produced the pre-guardrail
+    /// "Konrad" -> "laptop" rule would just as readily have produced
+    /// "hey Konrad" -> "hey there", and half-guarding that case would leave
+    /// the exact bug this exists to close.
+    private static func containsTaughtWord(_ heard: String, taughtWords: Set<String>) -> Bool {
+        guard !taughtWords.isEmpty else { return false }
+        let taughtLowercased = Set(taughtWords.flatMap { entry in
+            entry.split(whereSeparator: { $0.isWhitespace }).map {
+                $0.trimmingCharacters(in: CharacterSet.alphanumerics.inverted).lowercased()
+            }
+        })
+        let heardWords = heard.split(whereSeparator: { $0.isWhitespace }).map {
+            $0.trimmingCharacters(in: CharacterSet.alphanumerics.inverted).lowercased()
+        }
+        return heardWords.contains { !$0.isEmpty && taughtLowercased.contains($0) }
     }
 
     /// A -> B alongside B -> A rewrites every occurrence of both to one value.
@@ -596,6 +654,42 @@ enum LearnedStore {
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): shouldStore(\"\(testCase.heard)\" -> " +
                   "\"\(testCase.intended)\") = \(got) [\(testCase.why)]")
+        }
+
+        // MARK: Taught-word guard (automatic path only)
+        // AMUX-754: a pre-guardrail auto-learned rule "Konrad" -> "laptop"
+        // globally rewrote the user's own name because the diff-learning path
+        // never checked whether the misheard side was something the user had
+        // explicitly taught. `taughtWords` is non-nil only on that automatic
+        // path - the explicit path (Voice Training's add(), Dictionary
+        // corrections) never supplies it - so the same heard/existing
+        // combination must behave differently depending on which caller is
+        // driving `shouldStore`.
+        let taughtGuardCases: [(heard: String, intended: String, taughtWords: Set<String>?,
+                                existing: [LearnedCorrection], store: Bool, why: String)] = [
+            ("Konrad", "laptop", ["Konrad"], [], false,
+             "automatic path refuses a taught heard word"),
+            ("Konrad friend", "buddy pal", ["Konrad"], [], false,
+             "multi-word heard refused when any constituent word is taught"),
+            ("Lightrim", "Lightroom", ["Konrad"], [], true,
+             "heard side is not taught, stored as before"),
+            ("Konrad", "laptop", ["Konrad"],
+             [LearnedCorrection(heard: "Konrad", intended: "friend")], false,
+             "taught-word refusal runs before the existing-rule escape hatch"),
+            ("Konrad", "laptop", nil,
+             [LearnedCorrection(heard: "Konrad", intended: "friend")], true,
+             "explicit path (no taughtWords) leaves the escape hatch intact"),
+        ]
+        for testCase in taughtGuardCases {
+            let got = LearnedStore.shouldStore(
+                heard: testCase.heard, intended: testCase.intended,
+                existing: testCase.existing, checker: guardChecker,
+                taughtWords: testCase.taughtWords)
+            let ok = got == testCase.store
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): shouldStore(\"\(testCase.heard)\" -> " +
+                  "\"\(testCase.intended)\", taught: " +
+                  "\(testCase.taughtWords?.sorted() ?? [])) = \(got) [\(testCase.why)]")
         }
 
         // MARK: Non-cascading apply
@@ -785,6 +879,86 @@ enum LearnedStore {
         print("\(accumulatedOK ? "PASS" : "FAIL"): record(\"alpha\"->\"beta\" then " +
               "\"beta\"->\"alpha\") = \(firstResult), \(secondResult), corrections = " +
               "\(accumulating.corrections.map { "\($0.heard)->\($0.intended)" })")
+
+        // The taught-word guard only fires when `taughtWords` is supplied -
+        // exactly the automatic path's contract. A refused mapping still
+        // biases recognition toward the intended wording, same as any other
+        // reason a mapping is skipped.
+        var taughtRecordLearned = LearnedData()
+        let taughtRecordResult = LearnedStore.record(
+            heard: "Konrad", intended: "laptop",
+            in: &taughtRecordLearned, checker: recordChecker, taughtWords: ["Konrad"])
+        let taughtRecordOK = !taughtRecordResult
+            && !taughtRecordLearned.corrections.contains { $0.heard == "Konrad" }
+            && taughtRecordLearned.terms.contains("laptop")
+        if !taughtRecordOK { passed = false }
+        print("\(taughtRecordOK ? "PASS" : "FAIL"): record(\"Konrad\" -> \"laptop\", " +
+              "taught: [\"Konrad\"]) = \(taughtRecordResult), terms = " +
+              "\(taughtRecordLearned.terms)")
+
+        // The explicit path (add(), driven by Voice Training and Dictionary
+        // corrections) never supplies taughtWords - mirrored here by omitting
+        // it: the same mapping the automatic path just refused is stored
+        // normally.
+        var explicitRecordLearned = LearnedData()
+        let explicitRecordResult = LearnedStore.record(
+            heard: "Konrad", intended: "laptop",
+            in: &explicitRecordLearned, checker: recordChecker)
+        let explicitRecordOK = explicitRecordResult
+            && explicitRecordLearned.corrections.contains {
+                $0.heard == "Konrad" && $0.intended == "laptop"
+            }
+        if !explicitRecordOK { passed = false }
+        print("\(explicitRecordOK ? "PASS" : "FAIL"): record(\"Konrad\" -> \"laptop\", " +
+              "no taughtWords) = \(explicitRecordResult), corrections = " +
+              "\(explicitRecordLearned.corrections.map { "\($0.heard)->\($0.intended)" })")
+
+        // A word already learned as an intended term (`learned.terms`) counts
+        // as taught too, not just words injected via `taughtWords` - a name
+        // the user fixed once must guard itself on the very next diff, even
+        // before it ever makes it into VocabularyStore.
+        var termsGuardLearned = LearnedData(terms: ["Estefan"])
+        let termsGuardResult = LearnedStore.record(
+            heard: "Estefan", intended: "guessing",
+            in: &termsGuardLearned, checker: recordChecker, taughtWords: [])
+        let termsGuardOK = !termsGuardResult
+            && !termsGuardLearned.corrections.contains { $0.heard == "Estefan" }
+        if !termsGuardOK { passed = false }
+        print("\(termsGuardOK ? "PASS" : "FAIL"): record(\"Estefan\" -> \"guessing\", " +
+              "taught via learned.terms) = \(termsGuardResult)")
+
+        // End to end through learn(): the diff-learning path AppDelegate
+        // drives from a History correction. Isolated to a temp learned.json
+        // so this never touches the user's real store.
+        do {
+            let learnedTempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mutter-selftest-learned-taught", isDirectory: true)
+            try? FileManager.default.removeItem(at: learnedTempDir)
+            try? FileManager.default.createDirectory(
+                at: learnedTempDir, withIntermediateDirectories: true)
+            LearnedStore.directoryOverride = learnedTempDir
+            defer {
+                LearnedStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: learnedTempDir)
+            }
+
+            // This is the exact shape of the bug: the user said "laptop", the
+            // biased recognizer wrote "Konrad", the user fixed it in History,
+            // and the diff must not learn that fix as a global rewrite of a
+            // taught name.
+            let diffOutcome = LearnedStore.learn(
+                original: "Ask Konrad about the export.",
+                corrected: "Ask laptop about the export.",
+                checker: recordChecker, taughtWords: ["Konrad"])
+            let stored = LearnedStore.load()
+            let diffOK = diffOutcome.skipped == [LearnedPair(heard: "Konrad", intended: "laptop")]
+                && diffOutcome.learned.isEmpty
+                && !stored.corrections.contains { $0.heard == "Konrad" }
+                && stored.terms.contains("laptop")
+            if !diffOK { passed = false }
+            print("\(diffOK ? "PASS" : "FAIL"): learn() refuses a taught heard word end to " +
+                  "end, outcome = \(diffOutcome)")
+        }
 
         // MARK: Audio device enumeration
         // CoreAudio results depend on what is plugged in, so assert contracts
