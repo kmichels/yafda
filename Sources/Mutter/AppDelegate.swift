@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // dev build and an installed release build are different bundle ids
         // sharing one data folder, and only one may run (release-hardening.md).
         InstanceGuard.enforceAtLaunch()
+        MainMenu.install()
         entries = history.entries
         setUpStatusItem()
         refreshPermissions(promptAccessibility: true)
