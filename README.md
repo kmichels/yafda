@@ -1,11 +1,12 @@
-# Mutter 🎙️
+# YAFDA 🎙️
 
 > **This is a fork** of [janisbelozerovs-dev/murmur](https://github.com/janisbelozerovs-dev/murmur)
 > by Janis Belozerovs, MIT licensed, with thanks. It follows its own roadmap and is not
 > affiliated with upstream. Fixes that apply to both are sent back as pull requests.
 >
-> Named **Murmur** until July 2026, after upstream. Renamed to **Mutter** to
-> stop the fork and its parent sharing a name.
+> Formerly Mutter, formerly Murmur. Renamed to **YAFDA** (Yet Another Fine
+> Dictation App) after "Mutter" turned out to collide with another Mac
+> dictation app of the same name.
 
 **Private, unlimited voice dictation for macOS — 100% on-device.**
 
@@ -13,11 +14,12 @@ Hold `fn`, speak, release — clean text appears at your cursor in any app.
 No cloud, no subscription, no word limits. Your audio and transcripts never
 leave your Mac.
 
-![Mutter dashboard](Resources/screenshot.png)
+![YAFDA dashboard](Resources/screenshot.png)
 
-Mutter is an open-source, fully local take on the modern AI dictation app
-(in the spirit of Wispr Flow), built natively in Swift on Apple's on-device
-speech and language models, with an optional local Whisper engine.
+YAFDA — Yet Another Fine Dictation App — is an open-source, fully local take
+on the modern AI dictation app (in the spirit of Wispr Flow), built natively
+in Swift on Apple's on-device speech and language models, with an optional
+local Whisper engine.
 
 ## Features
 
@@ -55,8 +57,8 @@ speech and language models, with an optional local Whisper engine.
 ```bash
 git clone <this-repo>
 cd mutter
-./scripts/make_app.sh     # builds build/Mutter.app
-open build/Mutter.app
+./scripts/make_app.sh     # builds build/YAFDA.app
+open build/YAFDA.app
 ```
 
 ### Code signing (read this before copying the app anywhere)
@@ -71,11 +73,12 @@ Two consequences worth knowing up front:
 - **The certificate is per-machine.** Each Mac creates its own, and although
   they share a name they are different keys. macOS ties a permission grant to
   the specific certificate, so **a build from one Mac will not carry its
-  permissions to another** — copying `Mutter.app` across machines gets you an
+  permissions to another** — copying `YAFDA.app` across machines gets you an
   app that has to re-request everything, or silently fails to type. Build on
   each Mac instead. It takes under a minute.
 - **The certificate is called `WhisperFlow Dev` and must stay that way.** The
-  app has been renamed twice since (WhisperFlow → Murmur → Mutter), so the
+  app has been renamed three times since (WhisperFlow → Murmur → Mutter →
+  YAFDA), so the
   name looks like leftover cruft and is a tempting thing to tidy up. Don't.
   The certificate forms half of the designated requirement macOS uses to
   recognise this app, so reissuing it under a current name invalidates the
@@ -87,26 +90,27 @@ Two consequences worth knowing up front:
 1. **Microphone** — allow when prompted on first dictation.
 2. **Accessibility** — allow when prompted (needed for the global hotkey and
    for pasting). If the app still shows it as missing, use *Settings →
-   Reset Grant & Relaunch* inside Mutter.
+   Reset Grant & Relaunch* inside YAFDA.
 
 ## CLI test modes
 
 ```bash
-.build/debug/Mutter --selftest                          # formatter + learning tests
-.build/debug/Mutter --transcribe audio.wav              # Apple engine
-.build/debug/Mutter --transcribe audio.wav --engine whisper
-.build/debug/Mutter --format "um hello new line hi"     # cleanup pipeline only
-.build/debug/Mutter --transform "fix this grammer pls"  # on-device LLM polish
+.build/debug/YAFDA --selftest                          # formatter + learning tests
+.build/debug/YAFDA --transcribe audio.wav              # Apple engine
+.build/debug/YAFDA --transcribe audio.wav --engine whisper
+.build/debug/YAFDA --format "um hello new line hi"     # cleanup pipeline only
+.build/debug/YAFDA --transform "fix this grammer pls"  # on-device LLM polish
 ```
 
 ## Privacy
 
 Everything runs on this Mac: recognition (Apple SpeechAnalyzer or local
 Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
-Profile analysis. Mutter makes no network requests except the one-time
+Profile analysis. YAFDA makes no network requests except the one-time
 model downloads by macOS itself (Apple speech assets) and, if you opt into
 the Whisper engine, the model fetch from Hugging Face. Dictation data is
-stored only in `~/Library/Application Support/Mutter/`.
+stored only in `~/Library/Application Support/Mutter/` (renaming the folder
+is a later phase of the YAFDA rename).
 
 ## Architecture
 

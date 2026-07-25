@@ -2,7 +2,7 @@ import AppKit
 import Speech
 import SwiftUI
 
-// MARK: - Palette (Mutter: warm paper, soft teal, adaptive light/dark)
+// MARK: - Palette (YAFDA: warm paper, soft teal, adaptive light/dark)
 
 enum Palette {
     private static func dynamic(_ light: NSColor, _ dark: NSColor) -> Color {
@@ -43,7 +43,7 @@ enum Palette {
     static let border = dynamic(
         NSColor.black.withAlphaComponent(0.08),
         NSColor.white.withAlphaComponent(0.12))
-    /// Mutter's accent: a soft teal.
+    /// YAFDA's accent: a soft teal.
     static let accent = dynamic(
         NSColor(red: 0.16, green: 0.55, blue: 0.52, alpha: 1),
         NSColor(red: 0.40, green: 0.78, blue: 0.74, alpha: 1))
@@ -240,7 +240,7 @@ struct SidebarView: View {
             HStack(spacing: 8) {
                 Image(systemName: "waveform")
                     .font(.system(size: 18, weight: .bold))
-                Text("Mutter")
+                Text("YAFDA")
                     .font(.system(size: 22, weight: .semibold))
                 Text("Local")
                     .font(.caption.weight(.medium))
@@ -382,7 +382,7 @@ struct HomePage: View {
             VStack(alignment: .leading, spacing: 14) {
                 Label("Correct this transcript", systemImage: "pencil")
                     .font(.headline)
-                Text("Fix what Mutter misheard. It compares your fix with the " +
+                Text("Fix what YAFDA misheard. It compares your fix with the " +
                      "original and learns the corrections for future dictations.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -429,7 +429,7 @@ struct HomePage: View {
                     .padding(.trailing, 40)
             }
             VStack(alignment: .leading, spacing: 10) {
-                (Text("Make Mutter sound like ")
+                (Text("Make YAFDA sound like ")
                     + Text("you").italic())
                     .font(.system(size: 32, design: .serif))
                     .foregroundStyle(.white)
@@ -535,7 +535,7 @@ struct HomePage: View {
                 } else {
                     Text("Still listening…")
                         .font(.system(size: 22, design: .serif))
-                    Text("Dictate a bit more and Mutter will sketch your " +
+                    Text("Dictate a bit more and YAFDA will sketch your " +
                          "persona from what you talk about.")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
@@ -742,7 +742,7 @@ struct HomePage: View {
                         Image(systemName: "pencil")
                     }
                     .buttonStyle(.plain)
-                    .help("Correct — Mutter learns from your fix")
+                    .help("Correct — YAFDA learns from your fix")
                     Button {
                         app.deleteHistoryEntry(id: entry.id)
                     } label: {
@@ -864,7 +864,7 @@ struct DictionaryPage: View {
             Text("Dictionary")
                 .font(.system(size: 30, weight: .medium))
                 .padding(.top, 24)
-            Text("Add names, jargon and terms you use so Mutter spells them your " +
+            Text("Add names, jargon and terms you use so YAFDA spells them your " +
                  "way. A plain word biases recognition. Turn on \u{201C}Correct a " +
                  "misspelling\u{201D} to also replace a form it keeps hearing wrong.")
                 .foregroundStyle(.secondary)
@@ -1015,7 +1015,7 @@ struct SettingsPage: View {
                     granted: app.axTrusted,
                     title: "Accessibility",
                     detail: "Required for the global hotkey and pasting. " +
-                            "Relaunch Mutter after granting.",
+                            "Relaunch YAFDA after granting.",
                     pane: "Privacy_Accessibility")
                 if !app.axTrusted {
                     HStack(spacing: 6) {
@@ -1169,7 +1169,7 @@ struct SettingsPage: View {
     private var microphoneCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Microphone").font(.headline)
-            Text("Mutter records from the system default unless you choose a device.")
+            Text("YAFDA records from the system default unless you choose a device.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -1405,7 +1405,7 @@ struct StylePage: View {
             Text("Style")
                 .font(.system(size: 30, weight: .medium))
                 .padding(.top, 24)
-            Text("Mutter adapts your tone to where you're writing — formal in docs, " +
+            Text("YAFDA adapts your tone to where you're writing — formal in docs, " +
                  "casual in chat. Rewriting runs on-device with Apple Intelligence.")
                 .foregroundStyle(.secondary)
 
@@ -1623,7 +1623,7 @@ struct TransformsPage: View {
 // MARK: - Voice Training
 
 /// Records a short sample, shows what the model heard, and saves the
-/// misheard → intended mapping so Mutter learns the user's pronunciation.
+/// misheard → intended mapping so YAFDA learns the user's pronunciation.
 @MainActor
 final class TrainingModel: ObservableObject {
     @Published var isRecording = false
@@ -1678,11 +1678,11 @@ final class TrainingModel: ObservableObject {
                     result = "Recognized correctly! Added “\(intended)” to your " +
                              "vocabulary so it stays reliable."
                 } else if LearnedStore.add(heard: heardText, intended: intended) {
-                    result = "Learned: “\(heardText)” → “\(intended)”. Mutter will " +
+                    result = "Learned: “\(heardText)” → “\(intended)”. YAFDA will " +
                              "make this correction automatically from now on."
                 } else {
                     result = "Heard “\(heardText)” for “\(intended)” — too common to " +
-                             "rewrite automatically, so Mutter will just expect " +
+                             "rewrite automatically, so YAFDA will just expect " +
                              "“\(intended)” when listening."
                 }
             } catch {
@@ -1703,8 +1703,8 @@ struct TrainingPage: View {
             Text("Voice Training")
                 .font(.system(size: 30, weight: .medium))
                 .padding(.top, 24)
-            Text("Teach Mutter how you pronounce names and jargon. Type a word, " +
-                 "say it, and Mutter learns what it hears from you — the mapping " +
+            Text("Teach YAFDA how you pronounce names and jargon. Type a word, " +
+                 "say it, and YAFDA learns what it hears from you — the mapping " +
                  "is applied to every future dictation, and the word is fed to " +
                  "the speech model as expected vocabulary.")
                 .foregroundStyle(.secondary)

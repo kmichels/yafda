@@ -69,7 +69,8 @@ enum SyncMerge {
         // iCloud Drive may or may not exist on the machine running the tests, so
         // assert the contract rather than a particular answer.
         let synced = AppPaths.syncedDirectory
-        let syncedOK = synced == nil || synced?.lastPathComponent == "Mutter"
+        let syncedOK = synced == nil
+            || synced?.lastPathComponent == AppPaths.syncedDirectoryName
         if !syncedOK { passed = false }
         print("\(syncedOK ? "PASS" : "FAIL"): syncedDirectory = " +
               "\(synced?.path ?? "nil (iCloud Drive unavailable)")")
@@ -126,7 +127,7 @@ enum SyncMerge {
                            setUp: (URL) -> Void,
                            expect: (URL) -> Bool) {
             let scratch = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-migrate-\(UUID().uuidString)",
+                .appendingPathComponent("yafda-selftest-migrate-\(UUID().uuidString)",
                                         isDirectory: true)
             try? FileManager.default.createDirectory(
                 at: scratch, withIntermediateDirectories: true)
@@ -198,15 +199,15 @@ enum SyncMerge {
         // that changes every launch, so TCC grants evaporate between runs and
         // present as a permissions bug. Distribution depends on catching it.
         let locationCases: [(path: String, expected: AppPaths.InstallLocation)] = [
-            ("/Applications/Mutter.app", .installed),
-            ("/Users/konrad/Applications/Mutter.app", .installed),
-            ("/private/var/folders/l7/xyz/T/AppTranslocation/A1B2/d/Mutter.app",
+            ("/Applications/YAFDA.app", .installed),
+            ("/Users/konrad/Applications/YAFDA.app", .installed),
+            ("/private/var/folders/l7/xyz/T/AppTranslocation/A1B2/d/YAFDA.app",
              .translocated),
             // Translocation wins even from a path that otherwise looks installed.
-            ("/Applications/AppTranslocation/X/d/Mutter.app", .translocated),
-            ("/Users/konrad/Downloads/Mutter.app", .looseOnDisk),
-            ("/Volumes/Mutter/Mutter.app", .looseOnDisk),
-            ("/Users/konrad/projects/mutter/build/Mutter.app", .looseOnDisk),
+            ("/Applications/AppTranslocation/X/d/YAFDA.app", .translocated),
+            ("/Users/konrad/Downloads/YAFDA.app", .looseOnDisk),
+            ("/Volumes/YAFDA/YAFDA.app", .looseOnDisk),
+            ("/Users/konrad/projects/mutter/build/YAFDA.app", .looseOnDisk),
         ]
         for testCase in locationCases {
             let got = AppPaths.installLocation(of: testCase.path)
@@ -227,7 +228,7 @@ enum SyncMerge {
             ("--selftest", false),
         ]
         for testCase in noiseCases {
-            let got = MutterMain.isLaunchNoise(testCase.argument)
+            let got = YAFDAMain.isLaunchNoise(testCase.argument)
             let ok = got == testCase.isNoise
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): isLaunchNoise(\"\(testCase.argument)\") -> \(got)")
@@ -242,7 +243,7 @@ enum SyncMerge {
                               setUp: (URL) -> Void,
                               expect: (URL?, URL) -> Bool) {
             let scratch = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-shared-\(UUID().uuidString)",
+                .appendingPathComponent("yafda-selftest-shared-\(UUID().uuidString)",
                                         isDirectory: true)
             try? FileManager.default.createDirectory(
                 at: scratch, withIntermediateDirectories: true)
@@ -363,7 +364,7 @@ enum SyncMerge {
         // ABORT the sync (protecting the remote), not read as mass deletion.
         do {
             let syncTmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-synccomp", isDirectory: true)
+                .appendingPathComponent("yafda-selftest-synccomp", isDirectory: true)
             try? FileManager.default.removeItem(at: syncTmp)
             let localDir = syncTmp.appendingPathComponent("local", isDirectory: true)
             let remoteDir = syncTmp.appendingPathComponent("remote", isDirectory: true)
@@ -453,7 +454,7 @@ enum SyncMerge {
         // against temp dirs with the flag forced.
         do {
             let seedTmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-seedguard", isDirectory: true)
+                .appendingPathComponent("yafda-selftest-seedguard", isDirectory: true)
             try? FileManager.default.removeItem(at: seedTmp)
             let localDir = seedTmp.appendingPathComponent("local", isDirectory: true)
             let remoteDir = seedTmp.appendingPathComponent("remote", isDirectory: true)

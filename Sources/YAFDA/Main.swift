@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 @main
-struct MutterMain {
+struct YAFDAMain {
     @MainActor
     static func main() async {
         Settings.migrateLegacyDefaults()
@@ -133,7 +133,7 @@ struct MutterMain {
             // Merge with the other Mac off the main thread, via the same
             // scheduler every later trigger uses. A coordinated read can
             // block on the iCloud daemon, and a hang before `run()` would
-            // leave Mutter bouncing in the Dock with no UI at all. Routing
+            // leave YAFDA bouncing in the Dock with no UI at all. Routing
             // through SyncScheduler (rather than calling SyncedStore.syncAll
             // directly) also sets `lastCycleAt`, so the activation trigger
             // NSApp fires moments later during `showMainWindow()` correctly
@@ -163,15 +163,15 @@ struct MutterMain {
 
     private static func usageAndExit() -> Never {
         print("""
-        Mutter — local dictation (hold fn to talk, release to paste)
+        YAFDA — local dictation (hold fn to talk, release to paste)
 
         Usage:
-          Mutter                      run as menu bar app
-          Mutter --transcribe <file>  transcribe an audio file
+          YAFDA                      run as menu bar app
+          YAFDA --transcribe <file>  transcribe an audio file
                                       [--locale en-US] [--engine apple|whisper]
                                       [--whisper-model base|small|large-v3-v20240930_turbo]
-          Mutter --format "<text>"    run the text formatter on a string
-          Mutter --selftest           run formatter self-tests
+          YAFDA --format "<text>"    run the text formatter on a string
+          YAFDA --selftest           run formatter self-tests
         """)
         exit(0)
     }

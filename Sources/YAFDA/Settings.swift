@@ -124,7 +124,7 @@ enum Settings {
         set { defaults.set(newValue, forKey: "syncEnabled") }
     }
 
-    /// Whether Mutter starts itself at login.
+    /// Whether YAFDA starts itself at login.
     ///
     /// Matters more than it sounds for a menu-bar app: without it, the app is
     /// simply not running after a reboot, and with no Dock icon there is

@@ -33,7 +33,7 @@ struct AppliedCorrection: Codable, Equatable {
     var count: Int
 }
 
-/// What a transcript fix taught Mutter, and what it declined to learn.
+/// What a transcript fix taught YAFDA, and what it declined to learn.
 struct LearnOutcome: Equatable {
     var learned: [LearnedPair] = []
     var skipped: [LearnedPair] = []
@@ -49,7 +49,7 @@ struct LearnOutcome: Equatable {
         }
         if !skipped.isEmpty {
             parts.append("Skipped " + Self.list(skipped.map { "“\($0.heard)”" })
-                + " — Mutter won’t rewrite \(skipped.count == 1 ? "that" : "those")"
+                + " — YAFDA won’t rewrite \(skipped.count == 1 ? "that" : "those")"
                 + " automatically")
         }
         guard !parts.isEmpty else { return "Transcript updated." }
@@ -64,13 +64,13 @@ struct LearnOutcome: Equatable {
     }
 }
 
-/// Mutter's pronunciation memory. Populated by the Voice Training page and
+/// YAFDA's pronunciation memory. Populated by the Voice Training page and
 /// by corrections the user makes to transcripts in History. Used two ways:
 /// 1. `apply(in:)` fixes known mishearings in every transcript.
 /// 2. `biasTerms()` feeds the user's vocabulary into the speech model
 ///    before recognition (AnalysisContext contextual strings).
 enum LearnedStore {
-    private static let log = Logger(subsystem: "local.mutter", category: "LearnedStore")
+    private static let log = Logger(subsystem: "local.yafda", category: "LearnedStore")
 
     /// Tests point this at a temp directory; nil in normal operation.
     static var directoryOverride: URL?
@@ -914,14 +914,14 @@ enum LearnedStore {
              "Learned “Lightrim” → “Lightroom”."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work")]),
-             "Skipped “have” — Mutter won’t rewrite that automatically."),
+             "Skipped “have” — YAFDA won’t rewrite that automatically."),
             (LearnOutcome(learned: [LearnedPair(heard: "JPIG", intended: "JPEG")],
                           skipped: [LearnedPair(heard: "my", intended: "a")]),
-             "Learned “JPIG” → “JPEG”. Skipped “my” — Mutter won’t rewrite that automatically."),
+             "Learned “JPIG” → “JPEG”. Skipped “my” — YAFDA won’t rewrite that automatically."),
             (LearnOutcome(learned: [],
                           skipped: [LearnedPair(heard: "have", intended: "work"),
                                     LearnedPair(heard: "my", intended: "a")]),
-             "Skipped “have” and “my” — Mutter won’t rewrite those automatically."),
+             "Skipped “have” and “my” — YAFDA won’t rewrite those automatically."),
             // A heavily rewritten transcript must not produce an unbounded toast.
             (LearnOutcome(learned: [], skipped: [
                 LearnedPair(heard: "my", intended: "a"),
@@ -929,7 +929,7 @@ enum LearnedStore {
                 LearnedPair(heard: "God", intended: "guide"),
                 LearnedPair(heard: "form", intended: "forum"),
              ]),
-             "Skipped “my”, “have” and 2 more — Mutter won’t rewrite those automatically."),
+             "Skipped “my”, “have” and 2 more — YAFDA won’t rewrite those automatically."),
         ]
         for testCase in summaryCases {
             let got = testCase.outcome.summary
@@ -1052,7 +1052,7 @@ enum LearnedStore {
         // matters, not just an in-memory array shuffle.
         do {
             let termsTmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-terms", isDirectory: true)
+                .appendingPathComponent("yafda-selftest-terms", isDirectory: true)
             try? FileManager.default.removeItem(at: termsTmp)
             try? FileManager.default.createDirectory(at: termsTmp, withIntermediateDirectories: true)
             LearnedStore.directoryOverride = termsTmp
@@ -1132,7 +1132,7 @@ enum LearnedStore {
         // so this never touches the user's real store.
         do {
             let learnedTempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-learned-taught", isDirectory: true)
+                .appendingPathComponent("yafda-selftest-learned-taught", isDirectory: true)
             try? FileManager.default.removeItem(at: learnedTempDir)
             try? FileManager.default.createDirectory(
                 at: learnedTempDir, withIntermediateDirectories: true)
@@ -1167,7 +1167,7 @@ enum LearnedStore {
         // VocabularyStore idiom.
         do {
             let corruptTmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-corrupt-\(UUID().uuidString)",
+                .appendingPathComponent("yafda-selftest-corrupt-\(UUID().uuidString)",
                                         isDirectory: true)
             try? FileManager.default.createDirectory(
                 at: corruptTmp, withIntermediateDirectories: true)
@@ -1295,7 +1295,7 @@ enum LearnedStore {
         // File round trip, isolated to a temp dir so the user's real store is untouched.
         do {
             let vocabTempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-vocab", isDirectory: true)
+                .appendingPathComponent("yafda-selftest-vocab", isDirectory: true)
             try? FileManager.default.removeItem(at: vocabTempDir)
             try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
             VocabularyStore.directoryOverride = vocabTempDir
@@ -1316,7 +1316,7 @@ enum LearnedStore {
         // real store is untouched.
         do {
             let vocabTempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-vocab", isDirectory: true)
+                .appendingPathComponent("yafda-selftest-vocab", isDirectory: true)
             try? FileManager.default.removeItem(at: vocabTempDir)
             try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
             VocabularyStore.directoryOverride = vocabTempDir
@@ -1343,7 +1343,7 @@ enum LearnedStore {
         // MARK: Corrupt vocabulary.json is preserved, not re-migrated
         do {
             let vocabTempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-vocab-corrupt", isDirectory: true)
+                .appendingPathComponent("yafda-selftest-vocab-corrupt", isDirectory: true)
             try? FileManager.default.removeItem(at: vocabTempDir)
             try? FileManager.default.createDirectory(at: vocabTempDir, withIntermediateDirectories: true)
             VocabularyStore.directoryOverride = vocabTempDir

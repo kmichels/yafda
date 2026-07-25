@@ -12,7 +12,7 @@ struct Snippet: Codable, Identifiable, Equatable {
 /// Voice shortcuts: saying a trigger phrase mid-dictation inserts the saved
 /// text block — like Wispr Flow's Snippets.
 enum SnippetStore {
-    private static let log = Logger(subsystem: "local.mutter", category: "SnippetStore")
+    private static let log = Logger(subsystem: "local.yafda", category: "SnippetStore")
 
     /// Tests point this at a temp directory so self-tests (including the
     /// serialization self-test in `StoreOwner`) never touch the user's real
@@ -61,7 +61,7 @@ enum SnippetStore {
         // an undecodable store must never present as fresh-and-writable.
         do {
             let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-snippets-\(UUID().uuidString)",
+                .appendingPathComponent("yafda-selftest-snippets-\(UUID().uuidString)",
                                         isDirectory: true)
             try? FileManager.default.createDirectory(
                 at: tmp, withIntermediateDirectories: true)

@@ -1,9 +1,9 @@
-// Renders the Mutter app icon: soft teal rounded square with a white
+// Renders the YAFDA app icon: soft teal rounded square with a white
 // waveform. Run: swift scripts/make_icon.swift <output-1024.png>
 import AppKit
 
 let outputPath = CommandLine.arguments.count > 1
-    ? CommandLine.arguments[1] : "mutter-1024.png"
+    ? CommandLine.arguments[1] : "yafda-1024.png"
 
 let canvas = CGFloat(1024)
 let image = NSImage(size: NSSize(width: canvas, height: canvas))

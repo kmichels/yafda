@@ -19,7 +19,7 @@ enum VocabularyStore {
     /// user's real vocabulary.json. nil in normal operation.
     static var directoryOverride: URL?
 
-    private static let log = Logger(subsystem: "local.mutter", category: "VocabularyStore")
+    private static let log = Logger(subsystem: "local.yafda", category: "VocabularyStore")
 
     static var fileURL: URL {
         (directoryOverride ?? AppPaths.supportDirectory)

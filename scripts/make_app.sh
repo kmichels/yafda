@@ -1,20 +1,20 @@
 #!/bin/bash
-# Builds Mutter.app from the SwiftPM release binary.
+# Builds YAFDA.app from the SwiftPM release binary.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 swift build -c release
 
-APP="build/Mutter.app"
+APP="build/YAFDA.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp .build/release/Mutter "$APP/Contents/MacOS/Mutter"
+cp .build/release/YAFDA "$APP/Contents/MacOS/YAFDA"
 
 # App icon (generated once; rerun scripts/make_icon.swift to change it).
-if [ -f "Resources/Mutter.icns" ]; then
-    cp Resources/Mutter.icns "$APP/Contents/Resources/Mutter.icns"
+if [ -f "Resources/YAFDA.icns" ]; then
+    cp Resources/YAFDA.icns "$APP/Contents/Resources/YAFDA.icns"
 fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -30,11 +30,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key>
     <string>local.mutter</string>
     <key>CFBundleName</key>
-    <string>Mutter</string>
+    <string>YAFDA</string>
     <key>CFBundleExecutable</key>
-    <string>Mutter</string>
+    <string>YAFDA</string>
     <key>CFBundleIconFile</key>
-    <string>Mutter</string>
+    <string>YAFDA</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -54,7 +54,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMultipleInstancesProhibited</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Mutter records your voice while you hold the dictation key so it can transcribe it on-device.</string>
+    <string>YAFDA records your voice while you hold the dictation key so it can transcribe it on-device.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Local build — no data leaves this Mac.</string>
 </dict>

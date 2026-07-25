@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     /// Cmd-Tab activates the app, not a window - without this, switching to
-    /// Mutter with the dashboard closed lands on an app with nothing on
+    /// YAFDA with the dashboard closed lands on an app with nothing on
     /// screen. (Dock clicks arrive via applicationShouldHandleReopen instead,
     /// which macOS does not send for a switcher activation.)
     ///
@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if window == nil {
             let hosting = NSHostingController(rootView: MainView(app: self))
             let newWindow = NSWindow(contentViewController: hosting)
-            newWindow.title = "Mutter"
+            newWindow.title = "YAFDA"
             newWindow.styleMask = [
                 .titled, .closable, .miniaturizable, .resizable, .fullSizeContentView,
             ]
@@ -429,14 +429,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         case .processing: symbol = "hourglass"
         }
         statusItem.button?.image = NSImage(
-            systemSymbolName: symbol, accessibilityDescription: "Mutter")
+            systemSymbolName: symbol, accessibilityDescription: "YAFDA")
     }
 
     private func rebuildMenu() {
         let menu = NSMenu()
 
         let openItem = NSMenuItem(
-            title: "Open Mutter…", action: #selector(openMainWindow),
+            title: "Open YAFDA…", action: #selector(openMainWindow),
             keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
@@ -471,7 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         menu.addItem(.separator())
         let quit = NSMenuItem(
-            title: "Quit Mutter", action: #selector(NSApplication.terminate(_:)),
+            title: "Quit YAFDA", action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q")
         menu.addItem(quit)
 

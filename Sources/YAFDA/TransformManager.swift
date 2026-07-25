@@ -103,7 +103,7 @@ final class TransformManager {
                 let rewritten = try await engine.rewrite(
                     selection, instructions: transform.instructions)
                 guard !rewritten.isEmpty else {
-                    throw NSError(domain: "Mutter", code: 2, userInfo: [
+                    throw NSError(domain: "YAFDA", code: 2, userInfo: [
                         NSLocalizedDescriptionKey: "Model returned empty text",
                     ])
                 }

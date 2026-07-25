@@ -1,6 +1,8 @@
 # Renaming Mutter → YAFDA — Strategy
 
-**Status**: Draft (awaiting approval)
+**Status**: Approved (Konrad, 2026-07-25) — decisions: display/bundle/executable `YAFDA`;
+first release **0.10.0**; laptop gets the release install in Phase 4 (dev-build arrangement
+retires); GH repo rename with Phase 4.
 **Created**: 2026-07-25
 **Baseline**: `a6ee5cd` (v0.9.2), branch `local/main` lineage
 **Prior art**: `.planning/design/rename-to-mutter.md` — read it first. This doc is a delta

@@ -14,12 +14,12 @@ enum MainMenu {
 
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(
-            title: "About Mutter",
+            title: "About YAFDA",
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""))
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(
-            title: "Hide Mutter", action: #selector(NSApplication.hide(_:)),
+            title: "Hide YAFDA", action: #selector(NSApplication.hide(_:)),
             keyEquivalent: "h"))
         let hideOthers = NSMenuItem(
             title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
@@ -31,7 +31,7 @@ enum MainMenu {
             keyEquivalent: ""))
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(
-            title: "Quit Mutter", action: #selector(NSApplication.terminate(_:)),
+            title: "Quit YAFDA", action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"))
         let appItem = NSMenuItem()
         appItem.submenu = appMenu

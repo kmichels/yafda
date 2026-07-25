@@ -2,15 +2,15 @@ import Foundation
 import ServiceManagement
 import os
 
-/// Registers Mutter to start at login.
+/// Registers YAFDA to start at login.
 ///
 /// Without this, after a reboot the dictation key simply does nothing until
 /// the user remembers to launch the app - a failure more likely to strand a
 /// new user than the Accessibility grant everyone worries about. (The app is
-/// a regular app now, so at least an unlaunched Mutter is visibly absent from
+/// a regular app now, so at least an unlaunched YAFDA is visibly absent from
 /// the Dock rather than indistinguishable from a broken one.)
 enum LoginItem {
-    private static let log = Logger(subsystem: "local.mutter", category: "LoginItem")
+    private static let log = Logger(subsystem: "local.yafda", category: "LoginItem")
 
     /// What macOS currently believes, which is not always what we asked for —
     /// the user can revoke a login item in System Settings behind our back.
@@ -18,7 +18,7 @@ enum LoginItem {
         SMAppService.mainApp.status == .enabled
     }
 
-    /// True when the user disabled it in System Settings rather than in Mutter.
+    /// True when the user disabled it in System Settings rather than in YAFDA.
     /// Worth surfacing: the in-app toggle would otherwise look broken.
     static var wasDeniedBySystem: Bool {
         SMAppService.mainApp.status == .requiresApproval

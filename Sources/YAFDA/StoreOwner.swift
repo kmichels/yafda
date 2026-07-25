@@ -18,7 +18,7 @@ import Foundation
 enum StoreOwner {
     private static let key = DispatchSpecificKey<Void>()
     private static let queue: DispatchQueue = {
-        let queue = DispatchQueue(label: "local.mutter.store-owner")
+        let queue = DispatchQueue(label: "local.yafda.store-owner")
         queue.setSpecific(key: key, value: ())
         return queue
     }()
@@ -76,7 +76,7 @@ enum StoreOwner {
         // of interleaving mid load-modify-save.
         do {
             let scratch = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mutter-selftest-owner-\(UUID().uuidString)",
+                .appendingPathComponent("yafda-selftest-owner-\(UUID().uuidString)",
                                         isDirectory: true)
             let localDir = scratch.appendingPathComponent("local", isDirectory: true)
             let remoteDir = scratch.appendingPathComponent("remote", isDirectory: true)

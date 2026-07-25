@@ -7,8 +7,8 @@ import os
 /// `SyncedStore`/`StoreOwner`; this only owns timing, so it stays testable
 /// with an injected clock and cycle instead of real sleeps or real iCloud.
 enum SyncScheduler {
-    private static let log = Logger(subsystem: "local.mutter", category: "sync")
-    private static let queue = DispatchQueue(label: "local.mutter.sync-scheduler")
+    private static let log = Logger(subsystem: "local.yafda", category: "sync")
+    private static let queue = DispatchQueue(label: "local.yafda.sync-scheduler")
 
     /// Tests inject their own clock so rate-limit cases never depend on
     /// wall-clock sleeps.

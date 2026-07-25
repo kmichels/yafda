@@ -45,7 +45,7 @@ struct SyncBase: Codable, Equatable {
 /// file; `StoreOwner` is what keeps a single Mac's own concurrent mutations
 /// and sync cycles from interleaving mid load-modify-save.
 enum SyncedStore {
-    private static let log = Logger(subsystem: "local.mutter", category: "sync")
+    private static let log = Logger(subsystem: "local.yafda", category: "sync")
 
     // MARK: - Keying
 

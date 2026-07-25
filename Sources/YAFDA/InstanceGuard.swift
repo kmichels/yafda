@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import os
 
-/// Refuses to run alongside another Mutter under a different bundle id.
+/// Refuses to run alongside another YAFDA under a different bundle id.
 ///
 /// Dev (`local.mutter`) and release (`com.konradmichels.mutter`) builds are
 /// different bundle ids, so `LSMultipleInstancesProhibited` no longer
@@ -12,7 +12,7 @@ import os
 /// paste keystrokes, and a second process `StoreOwner` cannot serialize
 /// against. One of them has to stand down; the one launching second does.
 enum InstanceGuard {
-    private static let log = Logger(subsystem: "local.mutter", category: "InstanceGuard")
+    private static let log = Logger(subsystem: "local.yafda", category: "InstanceGuard")
 
     struct AppDescriptor {
         var executableName: String?
@@ -20,14 +20,14 @@ enum InstanceGuard {
         var isSelf: Bool
     }
 
-    /// The pure decision: the first running app that is also named Mutter
+    /// The pure decision: the first running app that is also named YAFDA
     /// under a DIFFERENT bundle id, self excluded. Same name + same id is
     /// not a conflict here - that is `LSMultipleInstancesProhibited`'s job.
     static func conflictingApp(
         myBundleID: String?, apps: [AppDescriptor]) -> AppDescriptor? {
         apps.first { app in
             !app.isSelf
-                && app.executableName == "Mutter"
+                && app.executableName == "YAFDA"
                 && app.bundleID != myBundleID
         }
     }
@@ -47,13 +47,13 @@ enum InstanceGuard {
             myBundleID: Bundle.main.bundleIdentifier, apps: descriptors)
         else { return }
         log.error("""
-            Another Mutter is already running \
+            Another YAFDA is already running \
             (\(other.bundleID ?? "unknown bundle id", privacy: .public)); quitting.
             """)
         let alert = NSAlert()
-        alert.messageText = "Another Mutter is already running"
+        alert.messageText = "Another YAFDA is already running"
         alert.informativeText = """
-            A Mutter with a different bundle id \
+            A YAFDA with a different bundle id \
             (\(other.bundleID ?? "unknown")) is already running - probably a \
             dev build alongside the installed release. Both share the same \
             data, so only one can run. This copy will quit; close the other \
@@ -71,17 +71,17 @@ enum InstanceGuard {
         let devID = "local.mutter"
         let cases: [(name: String, apps: [AppDescriptor], expectConflict: Bool)] = [
             ("dev running, release launching",
-             [AppDescriptor(executableName: "Mutter", bundleID: devID, isSelf: false)],
+             [AppDescriptor(executableName: "YAFDA", bundleID: devID, isSelf: false)],
              true),
             ("same bundle id is not this guard's job",
-             [AppDescriptor(executableName: "Mutter", bundleID: releaseID, isSelf: false)],
+             [AppDescriptor(executableName: "YAFDA", bundleID: releaseID, isSelf: false)],
              false),
             ("other apps never conflict",
              [AppDescriptor(executableName: "Safari", bundleID: "com.apple.Safari",
                             isSelf: false)],
              false),
             ("self is excluded even under another id",
-             [AppDescriptor(executableName: "Mutter", bundleID: devID, isSelf: true)],
+             [AppDescriptor(executableName: "YAFDA", bundleID: devID, isSelf: true)],
              false),
         ]
         for testCase in cases {

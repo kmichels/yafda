@@ -2,7 +2,7 @@ import Foundation
 import os
 
 enum AppPaths {
-    private static let log = Logger(subsystem: "local.mutter", category: "AppPaths")
+    private static let log = Logger(subsystem: "local.yafda", category: "AppPaths")
 
     /// Every name this app's data folder has had, newest first. The app has
     /// been renamed twice (WhisperFlow -> Murmur -> Mutter) and each rename
@@ -115,7 +115,7 @@ enum AppPaths {
     /// Folder shared between this user's Macs, or nil when iCloud Drive is
     /// unavailable.
     ///
-    /// A plain path under CloudDocs works because Mutter is unsandboxed and
+    /// A plain path under CloudDocs works because YAFDA is unsandboxed and
     /// carries no entitlements; a real ubiquity container would require a paid
     /// signing identity.
     /// Shared folder name, and the names it has had before. Unlike the local
