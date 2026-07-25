@@ -43,8 +43,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>26.0</string>
-    <key>LSUIElement</key>
-    <true/>
+    <!-- No LSUIElement here, deliberately: WhisperFlow was a regular app and
+         Cmd-Tab reaching the dashboard is part of the workflow. Setting it
+         back to true removes the app from the switcher and the Dock. -->
+
     <!-- Two copies running at once means two status items, two global event
          monitors, two paste keystrokes per dictation, and two processes racing
          on the same sync-base.json. Easy to hit with an old build in Downloads

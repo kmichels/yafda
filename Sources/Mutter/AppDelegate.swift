@@ -96,6 +96,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return true
     }
 
+    /// Cmd-Tab activates the app, not a window - without this, switching to
+    /// Mutter with the dashboard closed lands on an app with nothing on
+    /// screen. (Dock clicks arrive via applicationShouldHandleReopen instead,
+    /// which macOS does not send for a switcher activation.)
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if let window, window.isMiniaturized {
+            window.deminiaturize(nil)
+        } else if window?.isVisible != true {
+            showMainWindow()
+        }
+    }
+
     // MARK: - Main window
 
     func showMainWindow() {
