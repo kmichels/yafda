@@ -81,20 +81,30 @@ enum LearnedStore {
     private static let defaultWordChecker: WordChecker = SystemWordChecker()
 
     static func load() -> LearnedData {
-        guard let data = try? Data(contentsOf: fileURL),
-              let learned = try? JSONDecoder().decode(LearnedData.self, from: data)
-        else { return LearnedData() }
-        return learned
+        StoreOwner.sync {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let learned = try? JSONDecoder().decode(LearnedData.self, from: data)
+            else { return LearnedData() }
+            return learned
+        }
     }
 
+    /// - Note: skips the after-write debounce trigger when called as part of
+    ///   a sync cycle's own write-back (`StoreOwner.isRunningSyncCycle`) -
+    ///   otherwise every cycle would perpetually schedule its own successor.
     @discardableResult
     static func save(_ learned: LearnedData) -> Bool {
-        guard let data = try? JSONEncoder().encode(learned) else { return false }
-        do {
-            try data.write(to: fileURL, options: .atomic)
-            return true
-        } catch {
-            return false
+        StoreOwner.sync {
+            guard let data = try? JSONEncoder().encode(learned) else { return false }
+            do {
+                try data.write(to: fileURL, options: .atomic)
+                if !StoreOwner.isRunningSyncCycle {
+                    SyncScheduler.triggerDebounced(reason: "learned.json write")
+                }
+                return true
+            } catch {
+                return false
+            }
         }
     }
 
@@ -134,12 +144,18 @@ enum LearnedStore {
     /// Adds one mapping (merging duplicates) and remembers the intended term.
     /// - Returns: whether the mapping was stored. A rejected mapping still
     ///   contributes its intended wording as a recognition-bias term.
+    ///
+    /// The whole load-modify-save runs as one `StoreOwner.sync` block so a
+    /// sync cycle can never read a snapshot from between this method's own
+    /// load and save and silently lose one side of the update.
     @discardableResult
     static func add(heard: String, intended: String) -> Bool {
-        var learned = load()
-        let stored = record(heard: heard, intended: intended, in: &learned)
-        save(learned)
-        return stored
+        StoreOwner.sync {
+            var learned = load()
+            let stored = record(heard: heard, intended: intended, in: &learned)
+            save(learned)
+            return stored
+        }
     }
 
     /// Folds `heard -> intended` into `corrections`, collapsing every existing
@@ -180,12 +196,16 @@ enum LearnedStore {
     }
 
     /// Remembers a term for recognition biasing without any mapping.
+    ///
+    /// Load-modify-save runs as one `StoreOwner.sync` block - see `add`.
     static func addTerm(_ term: String) {
-        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        var learned = load()
-        appendTerm(trimmed, to: &learned)
-        save(learned)
+        StoreOwner.sync {
+            let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            var learned = load()
+            appendTerm(trimmed, to: &learned)
+            save(learned)
+        }
     }
 
     private static func appendTerm(_ term: String, to learned: inout LearnedData) {
@@ -202,15 +222,38 @@ enum LearnedStore {
     /// button drives this directly, so it reloads and saves like `addTerm`
     /// rather than taking an inout store - callers never see a stale copy.
     /// - Returns: whether a term was actually removed.
+    ///
+    /// Load-modify-save runs as one `StoreOwner.sync` block - see `add`.
     @discardableResult
     static func removeTerm(_ term: String) -> Bool {
-        var learned = load()
-        let key = term.lowercased()
-        let countBefore = learned.terms.count
-        learned.terms.removeAll { $0.lowercased() == key }
-        guard learned.terms.count != countBefore else { return false }
-        save(learned)
-        return true
+        StoreOwner.sync {
+            var learned = load()
+            let key = term.lowercased()
+            let countBefore = learned.terms.count
+            learned.terms.removeAll { $0.lowercased() == key }
+            guard learned.terms.count != countBefore else { return false }
+            save(learned)
+            return true
+        }
+    }
+
+    /// Removes one correction rule by id. Backs the Training page's
+    /// delete-correction button, which used to `load()`, mutate, `save()`
+    /// inline - a load-modify-save outside any store-owned entry point, so
+    /// wrapping `load`/`save` individually would not have made that
+    /// *sequence* atomic, only its two halves. This method makes the whole
+    /// sequence one `StoreOwner.sync` block instead.
+    /// - Returns: whether a correction was actually removed.
+    @discardableResult
+    static func removeCorrection(id: UUID) -> Bool {
+        StoreOwner.sync {
+            var learned = load()
+            let countBefore = learned.corrections.count
+            learned.corrections.removeAll { $0.id == id }
+            guard learned.corrections.count != countBefore else { return false }
+            save(learned)
+            return true
+        }
     }
 
     /// Learns from a user-corrected transcript: extracts word-level
@@ -220,27 +263,35 @@ enum LearnedStore {
     ///   self-tests must always inject their own so they never read
     ///   vocabulary.json.
     /// - Returns: the mappings learned and those skipped.
+    ///
+    /// The whole read (including the cross-store taught-word lookup),
+    /// modify, save runs as one `StoreOwner.sync` block - see `add`. The
+    /// nested `VocabularyStore.words()` call is itself owner-wrapped, but
+    /// `StoreOwner.sync` is reentrant (see `StoreOwner`), so it runs inline
+    /// here rather than deadlocking on the already-held queue.
     @discardableResult
     static func learn(original: String, corrected: String,
                       checker: WordChecker? = nil,
                       taughtWords: Set<String>? = nil) -> LearnOutcome {
-        // learn() is the automatic path, so it always guards against taught
-        // words - unlike record()'s default, where nil means "skip the
-        // guard" (the explicit path's contract).
-        let effectiveTaughtWords = taughtWords ?? Set(VocabularyStore.words())
-        var outcome = LearnOutcome()
-        var learned = load()
-        for candidate in extractCorrections(original: original, corrected: corrected) {
-            let pair = LearnedPair(heard: candidate.heard, intended: candidate.intended)
-            if record(heard: candidate.heard, intended: candidate.intended, in: &learned,
-                     checker: checker, taughtWords: effectiveTaughtWords) {
-                outcome.learned.append(pair)
-            } else {
-                outcome.skipped.append(pair)
+        StoreOwner.sync {
+            // learn() is the automatic path, so it always guards against
+            // taught words - unlike record()'s default, where nil means
+            // "skip the guard" (the explicit path's contract).
+            let effectiveTaughtWords = taughtWords ?? Set(VocabularyStore.words())
+            var outcome = LearnOutcome()
+            var learned = load()
+            for candidate in extractCorrections(original: original, corrected: corrected) {
+                let pair = LearnedPair(heard: candidate.heard, intended: candidate.intended)
+                if record(heard: candidate.heard, intended: candidate.intended, in: &learned,
+                         checker: checker, taughtWords: effectiveTaughtWords) {
+                    outcome.learned.append(pair)
+                } else {
+                    outcome.skipped.append(pair)
+                }
             }
+            save(learned)
+            return outcome
         }
-        save(learned)
-        return outcome
     }
 
     // MARK: - Using the knowledge

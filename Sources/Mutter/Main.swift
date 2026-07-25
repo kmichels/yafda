@@ -54,8 +54,10 @@ struct MutterMain {
             let syncPassed = SyncMerge.runSelfTest()
             let micPassed = MicMonitor.runSelfTest()
             let historyPassed = HistoryStore.runSelfTest()
+            let storeOwnerPassed = StoreOwner.runSelfTest()
+            let schedulerPassed = SyncScheduler.runSelfTest()
             exit(formatterPassed && learnedPassed && syncPassed && micPassed
-                 && historyPassed ? 0 : 1)
+                 && historyPassed && storeOwnerPassed && schedulerPassed ? 0 : 1)
 
         case .format(let text):
             // Same pipeline as live dictation: format, apply learned
@@ -124,12 +126,15 @@ struct MutterMain {
             app.setActivationPolicy(.regular)
             let delegate = AppDelegate()
             app.delegate = delegate
-            // Merge with the other Mac off the main thread. A coordinated read
-            // can block on the iCloud daemon, and a hang before `run()` would
-            // leave Mutter bouncing in the Dock with no UI at all.
-            DispatchQueue.global(qos: .userInitiated).async {
-                SyncedStore.syncAll()
-            }
+            // Merge with the other Mac off the main thread, via the same
+            // scheduler every later trigger uses. A coordinated read can
+            // block on the iCloud daemon, and a hang before `run()` would
+            // leave Mutter bouncing in the Dock with no UI at all. Routing
+            // through SyncScheduler (rather than calling SyncedStore.syncAll
+            // directly) also sets `lastCycleAt`, so the activation trigger
+            // NSApp fires moments later during `showMainWindow()` correctly
+            // rate-limits against this launch sync instead of double-firing.
+            SyncScheduler.triggerUnconditional(reason: "launch")
             app.run()
         }
     }
