@@ -1425,6 +1425,21 @@ enum LearnedStore {
              "send it to focus", "send it to Lightroom", nil),
             ("newline injection is rejected", ["Phocus"],
              "send it to focus", "send it to\nPhocus", nil),
+            // The Neil->amux bug (2026-07-25): both are vocabulary terms, and
+            // the model "corrected" one into the other. A word that already IS
+            // a vocab term is correct by definition and must never be
+            // substituted away — the original word wins, silently.
+            ("a vocab word is never substituted away", ["amux", "Neil"],
+             "ask Neil about it", "ask amux about it", "ask Neil about it"),
+            // The protection skips that word only; a legitimate substitution
+            // elsewhere in the sentence still lands.
+            ("vocab-word protection is per-word", ["amux", "Neil", "Phocus"],
+             "tell Neil to open focus", "tell amux to open Phocus",
+             "tell Neil to open Phocus"),
+            // Case-insensitive protection: the recognizer may down-case a
+            // taught name; it is still the taught word.
+            ("vocab-word protection is case-insensitive", ["amux", "Neil"],
+             "ask neil about it", "ask amux about it", "ask neil about it"),
         ]
         for testCase in disambigGuardCases {
             let got = VocabularyDisambiguator.sanitized(

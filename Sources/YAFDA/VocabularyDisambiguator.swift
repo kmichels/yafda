@@ -30,7 +30,8 @@ struct VocabularyDisambiguator {
         In the text below, replace any word that — given the sentence context — \
         is actually one of these custom terms, with the exact custom term. Only \
         replace a word that sounds like a custom term AND where the context \
-        clearly means the custom term. Change nothing else: do not rephrase, \
+        clearly means the custom term. Never replace a word that already is \
+        one of the custom terms. Change nothing else: do not rephrase, \
         add, remove, reorder, or repunctuate words. If nothing should change, \
         return the text exactly as given.
         Output ONLY the resulting text — no preamble, no quotes, no explanations.
@@ -126,6 +127,16 @@ struct VocabularyDisambiguator {
             if core(originalWord) == core(candidateWord) {
                 // Unchanged core: the original word is authoritative. Any
                 // decoration the model added dies here.
+                rebuilt.append(originalWord)
+                continue
+            }
+            // A word that already IS a vocabulary term is correct by
+            // definition and is never substituted away (the Neil->amux bug:
+            // with both in the vocabulary, the model "corrected" one taught
+            // word into another). The prompt forbids this too, but prompt
+            // compliance is probabilistic; this is the deterministic guard.
+            // Per-word and case-insensitive: keep the original, keep going.
+            if canonical[core(originalWord).lowercased()] != nil {
                 rebuilt.append(originalWord)
                 continue
             }
