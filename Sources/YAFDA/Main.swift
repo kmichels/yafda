@@ -59,9 +59,11 @@ struct YAFDAMain {
             let snippetPassed = SnippetStore.runSelfTest()
             let instanceGuardPassed = InstanceGuard.runSelfTest()
             let mainMenuPassed = MainMenu.runSelfTest()
+            let updateCheckerPassed = await UpdateChecker.runSelfTest()
             exit(formatterPassed && learnedPassed && syncPassed && micPassed
                  && historyPassed && storeOwnerPassed && schedulerPassed
-                 && snippetPassed && instanceGuardPassed && mainMenuPassed ? 0 : 1)
+                 && snippetPassed && instanceGuardPassed && mainMenuPassed
+                 && updateCheckerPassed ? 0 : 1)
 
         case .format(let text):
             // Same pipeline as live dictation: format, apply learned

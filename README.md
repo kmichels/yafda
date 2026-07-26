@@ -106,11 +106,15 @@ Two consequences worth knowing up front:
 
 Everything runs on this Mac: recognition (Apple SpeechAnalyzer or local
 Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
-Profile analysis. YAFDA makes no network requests except the one-time
-model downloads by macOS itself (Apple speech assets) and, if you opt into
-the Whisper engine, the model fetch from Hugging Face. Dictation data is
-stored only in `~/Library/Application Support/YAFDA/` (migrated
-automatically from the folder's earlier names on first launch).
+Profile analysis. Besides the one-time model downloads by macOS itself
+(Apple speech assets) and, if you opt into the Whisper engine, the model
+fetch from Hugging Face, the only other network request YAFDA makes is a
+once-a-day anonymous GET to GitHub's API to check for a newer release - no
+identifying payload, just the request itself. Turn it off in Settings if
+you'd rather not; a manual "Check for Updates…" in the app menu still works
+either way, since that's a request you asked for. Dictation data is stored
+only in `~/Library/Application Support/YAFDA/` (migrated automatically from
+the folder's earlier names on first launch).
 
 ## Architecture
 
