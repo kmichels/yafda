@@ -137,6 +137,16 @@ happy menu path.
   helper; splitting the file is a separate, larger refactor out of scope for
   this change. Flagging here rather than silently exceeding it.
 
+### PR review round (panel + bot, 2026-07-26)
+
+- Adopted (panel Medium): `liveUpdateController` now `@MainActor` — it holds a MainActor
+  object and `MainMenu` is a plain enum, so the static was unisolated; only MainActor code
+  writes it today, but the annotation makes that a compiler guarantee.
+- Rejected (bot High, "pre-release suffixes compare wrong"): by design. Non-numeric
+  version components fail safe to `false` — a `v0.11.0-beta` tag would produce no nag
+  rather than a wrong one, this repo publishes no pre-release tags, and silence is the
+  correct failure direction for an update reminder.
+
 ## Open Questions
 
 None — shape approved in conversation 2026-07-26.

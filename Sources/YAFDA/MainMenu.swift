@@ -11,7 +11,7 @@ enum MainMenu {
     /// is unretained, so nothing else would keep it alive between clicks.
     /// Self-test builds never touch this; each gets its own controller that
     /// is free to deallocate once the test's structural checks are done.
-    private static var liveUpdateController: UpdateMenuController?
+    @MainActor private static var liveUpdateController: UpdateMenuController?
 
     /// Pure builder so the self-test can inspect the result without a
     /// running application. `appDelegate` is nil for self-tests and for any
