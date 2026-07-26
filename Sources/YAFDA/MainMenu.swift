@@ -7,9 +7,18 @@ import AppKit
 /// accessory era masked that; the Cmd-Tab change (3c15a34) made the app
 /// focusable and exposed it.
 enum MainMenu {
+    /// Retains the live controller for the app's lifetime - NSMenuItem.target
+    /// is unretained, so nothing else would keep it alive between clicks.
+    /// Self-test builds never touch this; each gets its own controller that
+    /// is free to deallocate once the test's structural checks are done.
+    private static var liveUpdateController: UpdateMenuController?
+
     /// Pure builder so the self-test can inspect the result without a
-    /// running application.
-    static func build() -> NSMenu {
+    /// running application. `appDelegate` is nil for self-tests and for any
+    /// caller that only wants the menu shape; the update-check items still
+    /// build, they simply have nothing to act on.
+    @MainActor
+    static func build(appDelegate: AppDelegate? = nil) -> NSMenu {
         let main = NSMenu()
 
         let appMenu = NSMenu()
@@ -18,6 +27,25 @@ enum MainMenu {
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""))
         appMenu.addItem(.separator())
+
+        let updateController = UpdateMenuController()
+        updateController.appDelegate = appDelegate
+        let checkItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(UpdateMenuController.checkForUpdates), keyEquivalent: "")
+        checkItem.target = updateController
+        appMenu.addItem(checkItem)
+        let updateItem = NSMenuItem(
+            title: "Update available", action: #selector(UpdateMenuController.openUpdatePage),
+            keyEquivalent: "")
+        updateItem.target = updateController
+        updateItem.isHidden = true
+        appMenu.addItem(updateItem)
+        updateController.checkItem = checkItem
+        updateController.updateItem = updateItem
+        appMenu.delegate = updateController
+        appMenu.addItem(.separator())
+
         appMenu.addItem(NSMenuItem(
             title: "Hide YAFDA", action: #selector(NSApplication.hide(_:)),
             keyEquivalent: "h"))
@@ -36,6 +64,11 @@ enum MainMenu {
         let appItem = NSMenuItem()
         appItem.submenu = appMenu
         main.addItem(appItem)
+        // Retained here unconditionally, not just for a live install: a
+        // self-test build's controller must survive past this function
+        // return too, since NSMenuItem.target is unretained and the
+        // self-test inspects `target != nil` against the returned menu.
+        liveUpdateController = updateController
 
         // Standard first-responder selectors with nil targets, so every text
         // field (Dictionary, scratchpad, History edit) gets the shortcuts a
@@ -78,17 +111,77 @@ enum MainMenu {
         return main
     }
 
+    // MARK: - Update check menu items
+
+    /// Owns the live behavior behind "Check for Updates…"/"Update available".
+    /// A plain NSObject rather than closures on the items themselves, because
+    /// NSMenuItem target-action needs a real object, and refreshing the items
+    /// each time the app menu opens needs an `NSMenuDelegate` - one object
+    /// covers both.
+    @MainActor
+    final class UpdateMenuController: NSObject, NSMenuDelegate {
+        weak var appDelegate: AppDelegate?
+        weak var checkItem: NSMenuItem?
+        weak var updateItem: NSMenuItem?
+
+        /// Manual check: ignores the throttle entirely (an explicit click is
+        /// its own consent), then settles on menu-item state only - no
+        /// dialogs. A found update lights up the update item; otherwise the
+        /// check item briefly reports "up to date" until the menu next opens.
+        @objc func checkForUpdates() {
+            guard let appDelegate, let checkItem else { return }
+            // Flagged in plan review: a silent multi-second network round
+            // trip reads as a broken menu item. "Checking…" is still
+            // menu-item state, not a dialog, so it doesn't cross the
+            // no-interruption line.
+            checkItem.title = "Checking for Updates…"
+            checkItem.isEnabled = false
+            Task {
+                defer { checkItem.isEnabled = true }
+                if let result = await appDelegate.runUpdateCheck() {
+                    updateItem?.title = "Update available — \(result.version)"
+                    updateItem?.isHidden = false
+                    checkItem.title = "Check for Updates…"
+                } else {
+                    let local = Bundle.main.infoDictionary?["CFBundleShortVersionString"]
+                        as? String ?? "?"
+                    checkItem.title = "You're up to date (\(local))"
+                }
+            }
+        }
+
+        @objc func openUpdatePage() {
+            guard let url = appDelegate?.availableUpdate?.url else { return }
+            NSWorkspace.shared.open(url)
+        }
+
+        /// Reverts the "up to date" retitle and refreshes the update item
+        /// from current state every time the app menu opens - the cheapest
+        /// way to keep a static-target menu honest without a Combine
+        /// subscription living on a namespace enum.
+        func menuWillOpen(_ menu: NSMenu) {
+            checkItem?.title = "Check for Updates…"
+            if let update = appDelegate?.availableUpdate {
+                updateItem?.title = "Update available — \(update.version)"
+                updateItem?.isHidden = false
+            } else {
+                updateItem?.isHidden = true
+            }
+        }
+    }
+
     /// Installs the menu on the running application. Called once from
     /// `applicationDidFinishLaunching`.
     @MainActor
-    static func install() {
-        let menu = build()
+    static func install(appDelegate: AppDelegate) {
+        let menu = build(appDelegate: appDelegate)
         NSApp.mainMenu = menu
         NSApp.windowsMenu = menu.items.last?.submenu
     }
 
     // MARK: - Self test
 
+    @MainActor
     static func runSelfTest() -> Bool {
         var passed = true
         let menu = build()
@@ -124,6 +217,19 @@ enum MainMenu {
                            action: #selector(NSWindow.performClose(_:))) != nil
         if !closeOK { passed = false }
         print("\(closeOK ? "PASS" : "FAIL"): main menu/Window has Close Cmd-W")
+
+        let checkForUpdatesItem = all.first {
+            $0.action == #selector(UpdateMenuController.checkForUpdates)
+        }
+        let updateAvailableItem = all.first {
+            $0.action == #selector(UpdateMenuController.openUpdatePage)
+        }
+        let updateItemsOK = checkForUpdatesItem?.isEnabled == true
+            && checkForUpdatesItem?.target != nil
+            && updateAvailableItem?.isHidden == true
+        if !updateItemsOK { passed = false }
+        print("\(updateItemsOK ? "PASS" : "FAIL"): main menu/Check for Updates… is always " +
+              "enabled, Update available starts hidden")
 
         return passed
     }

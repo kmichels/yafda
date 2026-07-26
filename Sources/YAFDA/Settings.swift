@@ -54,7 +54,7 @@ enum Settings {
         "hotkey", "locale", "styleDefault", "styleOverrides",
         "engine", "whisperModel", "inputDeviceUID", "voiceProfile",
         "disambiguationEngine", "appendTrailingSpace", "syncEnabled",
-        "launchAtLogin",
+        "launchAtLogin", "updateCheckEnabled",
     ]
 
     private static let migrationVersionKey = "defaultsMigratedVersion"
@@ -168,5 +168,30 @@ enum Settings {
         get { defaults.string(forKey: "disambiguationEngine")
             .flatMap(DisambiguationEngine.init(rawValue:)) ?? .off }
         set { defaults.set(newValue.rawValue, forKey: "disambiguationEngine") }
+    }
+
+    /// Whether the app checks GitHub Releases for a newer build. On by
+    /// default; the manual "Check for Updates…" menu item always works
+    /// regardless of this setting, since an explicit click is its own
+    /// consent.
+    ///
+    /// Note the `object(forKey:)` check: same `bool(forKey:)`-returns-false
+    /// trap as `appendTrailingSpace` — without it this would ship off for
+    /// everyone who has never touched the setting.
+    static var updateCheckEnabled: Bool {
+        get {
+            guard defaults.object(forKey: "updateCheckEnabled") != nil else { return true }
+            return defaults.bool(forKey: "updateCheckEnabled")
+        }
+        set { defaults.set(newValue, forKey: "updateCheckEnabled") }
+    }
+
+    /// When the last update check (auto or manual) ran. Ephemeral - not in
+    /// `migratedKeys` - a rename losing this just means the next launch
+    /// checks again instead of waiting out a throttle window, which is
+    /// harmless.
+    static var lastUpdateCheckAt: Date? {
+        get { defaults.object(forKey: "lastUpdateCheckAt") as? Date }
+        set { defaults.set(newValue, forKey: "lastUpdateCheckAt") }
     }
 }

@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var whisperModel: String = Settings.whisperModel
     @Published var whisperReady = false
     @Published var voiceProfile: VoiceProfile? = VoiceProfileStore.load()
+    @Published var availableUpdate: UpdateChecker.ReleaseInfo?
     private(set) lazy var transformManager = TransformManager(engine: rewriteEngine)
 
     /// Extra status line shown in the top bar while a transform runs.
@@ -47,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // dev build and an installed release build are different bundle ids
         // sharing one data folder, and only one may run (release-hardening.md).
         InstanceGuard.enforceAtLaunch()
-        MainMenu.install()
+        MainMenu.install(appDelegate: self)
         entries = history.entries
         setUpStatusItem()
         refreshPermissions(promptAccessibility: true)
@@ -82,6 +83,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             try? await transcriber.ensureModelInstalled()
         }
         refreshVoiceProfileIfDue()
+
+        if UpdateChecker.shouldAutoCheck(
+            now: Date(), lastCheckAt: Settings.lastUpdateCheckAt,
+            enabled: Settings.updateCheckEnabled) {
+            Task.detached { [weak self] in await self?.runUpdateCheck() }
+        }
+    }
+
+    /// Runs one update check and applies its result. Shared by the launch
+    /// auto-check (throttled) and the manual menu item (not) - a click is
+    /// its own consent to skip the wait.
+    @discardableResult
+    func runUpdateCheck() async -> UpdateChecker.ReleaseInfo? {
+        let result = await UpdateChecker.check(fetch: UpdateChecker.urlSessionFetch)
+        availableUpdate = result
+        Settings.lastUpdateCheckAt = Date()
+        return result
     }
 
     /// Regenerates the Voice Profile persona once enough new dictation has
