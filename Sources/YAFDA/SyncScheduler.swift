@@ -29,8 +29,35 @@ enum SyncScheduler {
     /// finished more recently than this.
     static let minimumInterval: TimeInterval = 300
 
-    private static var lastCycleAt: Date?
+    /// Read by the settings UI for the sync status caption; only the
+    /// scheduler itself writes it.
+    private(set) static var lastCycleAt: Date?
     private static var debounceGeneration = 0
+
+    /// The sync row's caption. Pure so it is testable; state comes from the
+    /// caller because the truth lives in three places (the toggle, iCloud
+    /// availability, this scheduler) and the caption must reflect all three,
+    /// never just the toggle position.
+    static func statusDescription(
+        enabled: Bool, cloudAvailable: Bool, lastCycleAt: Date?, now: Date
+    ) -> String {
+        guard enabled else {
+            return "Shares your dictionary, learned corrections and snippets " +
+                   "between your Macs through a YAFDA folder in iCloud Drive. " +
+                   "The first sync completes on the next launch."
+        }
+        guard cloudAvailable else {
+            return "Waiting for iCloud Drive — sign in (or let it finish " +
+                   "syncing) and YAFDA will pick it up."
+        }
+        guard let lastCycleAt else {
+            return "On — not yet synced this launch."
+        }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        let relative = formatter.localizedString(for: lastCycleAt, relativeTo: now)
+        return "On — last synced \(relative)."
+    }
 
     /// Resets all scheduler state. Test-only: production never needs to
     /// forget history mid-run.
@@ -117,6 +144,36 @@ enum SyncScheduler {
 
     static func runSelfTest() -> Bool {
         var passed = true
+
+        // MARK: statusDescription reflects real state, not the toggle
+        do {
+            let now = Date(timeIntervalSince1970: 2_000_000)
+            let recent = now.addingTimeInterval(-120)
+            let cases: [(name: String, got: String, want: (String) -> Bool)] = [
+                ("disabled invites and names iCloud Drive",
+                 statusDescription(enabled: false, cloudAvailable: true,
+                                   lastCycleAt: nil, now: now),
+                 { $0.contains("iCloud Drive") }),
+                ("enabled without iCloud says waiting",
+                 statusDescription(enabled: true, cloudAvailable: false,
+                                   lastCycleAt: recent, now: now),
+                 { $0.localizedCaseInsensitiveContains("waiting") }),
+                ("enabled before first cycle says not yet",
+                 statusDescription(enabled: true, cloudAvailable: true,
+                                   lastCycleAt: nil, now: now),
+                 { $0.localizedCaseInsensitiveContains("not yet") }),
+                ("enabled after a cycle gives a relative time",
+                 statusDescription(enabled: true, cloudAvailable: true,
+                                   lastCycleAt: recent, now: now),
+                 { $0.localizedCaseInsensitiveContains("ago") }),
+            ]
+            for testCase in cases {
+                let ok = testCase.want(testCase.got)
+                if !ok { passed = false }
+                print("\(ok ? "PASS" : "FAIL"): sync status/\(testCase.name) = " +
+                      "\"\(testCase.got)\"")
+            }
+        }
 
         // MARK: Debounce coalesces rapid mutations into one scheduled cycle
         do {

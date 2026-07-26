@@ -996,6 +996,12 @@ struct SettingsPage: View {
     // AudioDevices.inputDevices() inline would leave the picker stale when a
     // microphone is plugged in or removed while this view is open.
     @State private var devices: [AudioInputDevice] = AudioDevices.inputDevices()
+    // @State, not @AppStorage, deliberately breaking this page's own rule:
+    // Settings.syncEnabled's unset case falls back to "does sync-base.json
+    // exist" (the grandfather clause), which @AppStorage cannot express - it
+    // would read a hard false on every grandfathered machine. The toggle's
+    // setter writes Settings and this copy together.
+    @State private var syncEnabled = Settings.syncEnabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1130,6 +1136,53 @@ struct SettingsPage: View {
                     }
                     .labelsHidden()
                     .fixedSize()
+                }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sync across your Macs")
+                        // TimelineView so "last synced N minutes ago" stays
+                        // truthful while the page is open - the scheduler
+                        // updates on a background cadence SwiftUI can't see.
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            Text(SyncScheduler.statusDescription(
+                                enabled: syncEnabled,
+                                cloudAvailable: AppPaths.syncedDirectory != nil,
+                                lastCycleAt: SyncScheduler.lastCycleAt,
+                                now: context.date))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { syncEnabled },
+                        set: { enabled in
+                            Settings.syncEnabled = enabled
+                            syncEnabled = enabled
+                            if enabled {
+                                SyncScheduler.triggerUnconditional(
+                                    reason: "sync enabled in settings")
+                            }
+                        }))
+                        .labelsHidden()
+                }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Check for updates automatically")
+                        Text("Once a day, an anonymous query to GitHub for a " +
+                             "newer release - nothing about you is sent. " +
+                             "\u{201C}Check for Updates\u{2026}\u{201D} in the " +
+                             "app menu always works.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { Settings.updateCheckEnabled },
+                        set: { Settings.updateCheckEnabled = $0 }))
+                        .labelsHidden()
                 }
                 if app.engine == "whisper" {
                     Divider()
