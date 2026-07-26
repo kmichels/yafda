@@ -29,9 +29,21 @@ enum SyncScheduler {
     /// finished more recently than this.
     static let minimumInterval: TimeInterval = 300
 
-    /// Read by the settings UI for the sync status caption; only the
-    /// scheduler itself writes it.
-    private(set) static var lastCycleAt: Date?
+    /// Read by the settings UI (main thread) while the scheduler's queue
+    /// writes it, so access goes through its own lock — NOT `queue.sync`,
+    /// which would park the main thread behind an in-flight sync cycle.
+    static var lastCycleAt: Date? {
+        lastCycleLock.lock()
+        defer { lastCycleLock.unlock() }
+        return _lastCycleAt
+    }
+    private static let lastCycleLock = NSLock()
+    private static var _lastCycleAt: Date?
+    private static func setLastCycleAt(_ date: Date?) {
+        lastCycleLock.lock()
+        defer { lastCycleLock.unlock() }
+        _lastCycleAt = date
+    }
     private static var debounceGeneration = 0
 
     /// The sync row's caption. Pure so it is testable; state comes from the
@@ -65,7 +77,7 @@ enum SyncScheduler {
         now = { Date() }
         runCycle = { SyncedStore.syncAll() }
         scheduleAfterDelay = { delay, work in queue.asyncAfter(deadline: .now() + delay, execute: work) }
-        lastCycleAt = nil
+        setLastCycleAt(nil)
         debounceGeneration = 0
     }
 
@@ -79,7 +91,7 @@ enum SyncScheduler {
     private static func runNow(reason: String) {
         log.info("sync trigger (\(reason, privacy: .public)): running")
         runCycle()
-        lastCycleAt = now()
+        setLastCycleAt(now())
     }
 
     /// Quit, and the hourly backstop: always runs, no rate limit.
