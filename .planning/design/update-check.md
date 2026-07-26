@@ -147,6 +147,11 @@ happy menu path.
   rather than a wrong one, this repo publishes no pre-release tags, and silence is the
   correct failure direction for an update reminder.
 
+- Out of scope (panel round 2, two Highs): SE-0423 precondition claims against
+  `transformManager.onStatus` / `whisperEngine.onStatus` — pre-existing wiring this PR does
+  not touch (verified against the diff), shipping without incident since 0.9.x. If a
+  strict-concurrency audit of AppDelegate is wanted, that is its own task, not this PR.
+
 ## Open Questions
 
 None — shape approved in conversation 2026-07-26.
