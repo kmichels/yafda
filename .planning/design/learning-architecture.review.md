@@ -1,0 +1,31 @@
+The v2 architecture is a major improvement over v1, successfully replacing the fragile spell-checker floor and in-band tombstones with robust token budgeting and a three-way merge. However, the local-only restriction on deletion metadata threatens to break cross-device deletion sync, and minor edits to rules will prematurely wipe out accumulated usage metrics.
+
+### 🔴 High
+
+**Local-only termKeys breaks cross-device deletion propagation**
+Location: Section C: Lifecycle: deletions that stick
+If termKeys is strictly local-only and the shared iCloud file remains a flat [String], Device B cannot distinguish between 'Device A deleted term X' and 'Device A never knew term X'. This will cause deleted terms to resurrect when merging with other devices, defeating the goal of sticky deletions.
+Fix: Include termKeys (or a simplified deletion tombstone set) in the shared sync-base file. Since old clients use decodeIfPresent, they will safely ignore this new optional field while updated clients can correctly resolve deletions.
+
+### 🟡 Medium
+
+**Lowercased keys in termMeta and termKeys cause case-preservation loss**
+Location: Section A: Provenance metadata & Section C: Lifecycle
+Keying metadata and merge states strictly by lowercased terms prevents the system from distinguishing or preserving case-sensitive variations (e.g., 'JPEG' vs 'jpeg' or 'iPad' vs 'ipad') which are critical for Whisper's case-sensitive decoder prompt biasing.
+Fix: Key metadata by the exact case-sensitive term, but perform case-insensitive lookups or fallback matching during context assembly if an exact match is not found.
+
+**History UUID migration breaks sync compatibility with older clients**
+Location: Section E: Prerequisite fixes
+Migrating HistoryEntry.id from a text-hash to a random UUID on first load will cause older clients (which still compute IDs via hashValue) to treat migrated entries as entirely new records, leading to duplicate history entries across synced devices.
+Fix: Use a deterministic UUID generator (UUIDv5) based on the stable components of the history entry (e.g., timestamp + raw text) so both old and new clients compute the same ID without duplication.
+
+### 🟢 Low
+
+**Aggressive appliedCount reset on minor intended-text edits**
+Location: Section A: Provenance metadata & Section E: Feedback wiring
+Resetting the entire appliedCount when the 'intended' text changes means minor punctuation or casing corrections (e.g., 'Amux' to 'Amux!') will completely starve the rule's rank, treating a highly active rule as brand new.
+Fix: Only reset appliedCount if the semantic meaning changes, or preserve a fraction of the count (e.g., 50%) if the edit distance between the old and new intended text is very low.
+
+---
+
+**Verdict:** The local-only termKeys design must be revised to be shared in the sync-base file; otherwise, cross-device sync will continuously resurrect deleted terms, violating the core requirement of 'deletions that stick'.
